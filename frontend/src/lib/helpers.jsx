@@ -68,6 +68,62 @@ export function colMatches(selected, value) {
 
 export const SEVERITIES = ["CRIT", "ERR", "WARN", "NOTICE", "INFO", "DEBUG"];
 
+// Group a flat case list into a recursive tree: case # → cluster → node →
+// [autosupport cases]. Each node: { key, label, kind, children, cases }.
+export function buildCaseTree(cases) {
+  const root = [];
+  const find = (arr, key, label, kind) => {
+    let n = arr.find((x) => x.key === key);
+    if (!n) { n = { key, label, kind, children: [], cases: [] }; arr.push(n); }
+    return n;
+  };
+  for (const c of cases || []) {
+    const cn = c.case_number || "(no case #)";
+    const cl = c.cluster || "(no cluster)";
+    const nd = c.node || "(no node)";
+    const k1 = `c:${cn}`;
+    const n1 = find(root, k1, cn, "case");
+    const k2 = `${k1}|cl:${cl}`;
+    const n2 = find(n1.children, k2, cl, "cluster");
+    const n3 = find(n2.children, `${k2}|n:${nd}`, nd, "node");
+    n3.cases.push(c);
+  }
+  return root;
+}
+
+export function countAsup(node) {
+  return (node.cases ? node.cases.length : 0) +
+    (node.children || []).reduce((a, c) => a + countAsup(c), 0);
+}
+
+export function collectTreeKeys(nodes, acc = []) {
+  for (const n of nodes) { acc.push(n.key); collectTreeKeys(n.children || [], acc); }
+  return acc;
+}
+
+export function collectKeysByKind(nodes, kinds, acc = []) {
+  for (const n of nodes) {
+    if (kinds.includes(n.kind)) acc.push(n.key);
+    collectKeysByKind(n.children || [], kinds, acc);
+  }
+  return acc;
+}
+
+export const TREE_ICON = { case: "🗂", cluster: "🧩", node: "🖥" };
+
+// Map an AutoSupport type to a colour class (semantic, consistent colours).
+export function asupTypeClass(t) {
+  const s = (t || "").toLowerCase();
+  if (s.includes("weekly")) return "at-weekly";
+  if (s.includes("full") || s.includes("user-trigger") || s.includes("trigger")) return "at-full";
+  if (s.includes("management")) return "at-mgmt";
+  if (s.includes("performance")) return "at-perf";
+  if (s.includes("daily") || s.includes("nightly") || s.includes("periodic")) return "at-daily";
+  if (s.includes("boot")) return "at-boot";
+  if (s.includes("spares") || s.includes("low") || s.includes("error") || s.includes("fail")) return "at-alert";
+  return "at-other";
+}
+
 const _ENTITIES = { "&lt;": "<", "&gt;": ">", "&amp;": "&", "&quot;": '"', "&apos;": "'" };
 export function decodeXml(s) {
   return String(s == null ? "" : s)

@@ -6,7 +6,7 @@ import GrepModal from "./GrepModal.jsx";
 import InlineContent from "./InlineContent.jsx";
 import CompareControls from "./Compare.jsx";
 
-export default function AutoSupportView({ caseId }) {
+export default function AutoSupportView({ caseId, cases = [] }) {
   const [tab, setTab] = useState("files");
   const [files, setFiles] = useState(null);
   const [sel, setSel] = useState(new Set());
@@ -75,7 +75,7 @@ export default function AutoSupportView({ caseId }) {
             <button className="btn" onClick={parseSel} disabled={busy || !sel.size}>Parse selected ({sel.size})</button>
             <button className="btn" disabled={!sel.size} onClick={() => setGrep([...sel])}>Grep selected ({sel.size})</button>
             <button className="btn" onClick={() => setGrep(shown.map((f) => f.path))}>Grep all</button>
-            <CompareControls caseId={caseId} comp={null} paths={[...sel]} />
+            <CompareControls caseId={caseId} comp={null} paths={[...sel]} cases={cases} />
           </div>
 
           {!files ? <div className="info-text"><span className="spin" /> Loading…</div> : shown.length === 0 ? (

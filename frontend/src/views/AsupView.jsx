@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.js";
-import { fmtBytes, ExpandToggle, caseLabel } from "../lib/helpers.jsx";
+import { fmtBytes, ExpandToggle, caseLabel, asupTypeClass } from "../lib/helpers.jsx";
 
 const AIQ_URL = "https://aiq.netapp.com/asup-upload";
 
@@ -375,7 +375,7 @@ function AsupSelectNode({ node, depth, expanded, toggleExp, selCases, toggleCase
             style={{ paddingLeft: (depth + 1) * 18 + 8, cursor: running ? "default" : "pointer" }}>
             <input type="checkbox" checked={selCases.has(c.id)} disabled={running}
               onChange={() => toggleCase(c.id)} />
-            {c.asup_type && <span className="chip asup-type" style={{ minWidth: 70 }}>{c.asup_type}</span>}
+            {c.asup_type && <span className={`chip asup-type ${asupTypeClass(c.asup_type)}`} style={{ minWidth: 70 }}>{c.asup_type}</span>}
             <span className="case-tree-label mono">🕑 {c.generated_on || c.loaded_at || "(unknown time)"}</span>
             {st && st.phase && (
               <span className={`chip ${st.phase === "done" ? "" : "muted"}`} style={{ fontSize: 10.5 }}>

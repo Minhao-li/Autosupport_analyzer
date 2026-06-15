@@ -6,7 +6,7 @@ import GrepModal from "./GrepModal.jsx";
 import InlineContent from "./InlineContent.jsx";
 import CompareControls from "./Compare.jsx";
 
-export default function ComponentView({ caseId, comp, compName, vertical, initialFilter }) {
+export default function ComponentView({ caseId, comp, compName, vertical, initialFilter, cases = [] }) {
   const [tab, setTab] = useState("files");
   const [files, setFiles] = useState(null);
   const [sel, setSel] = useState(new Set());
@@ -109,7 +109,7 @@ export default function ComponentView({ caseId, comp, compName, vertical, initia
               title="Full-text search (substring/regex) across the checked files">Grep selected ({sel.size})</button>
             <button className="btn" onClick={() => setGrep((files || []).map((f) => f.path))}
               title="Full-text search across every file in this component (ignores the name filter above)">Grep all</button>
-            <CompareControls caseId={caseId} comp={comp} paths={[...sel]} />
+            <CompareControls caseId={caseId} comp={comp} paths={[...sel]} cases={cases} />
           </div>
 
           {!files ? <div className="info-text">Loading…</div> : shown.length === 0 ? (

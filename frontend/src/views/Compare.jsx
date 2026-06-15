@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.js";
-import { SEVERITIES } from "../lib/helpers.jsx";
+import { SEVERITIES, fmtBytes, buildCaseTree, collectTreeKeys, collectKeysByKind, countAsup, TREE_ICON, ExpandToggle, asupTypeClass } from "../lib/helpers.jsx";
 
 const baseName = (p) => p.split("/").pop();
 const isXmlPath = (p) => /\.xml(\.gz)?$/i.test(p);
@@ -13,6 +13,14 @@ function labelFor(p) {
   return parts.length > 1 ? parts[parts.length - 2] : p;
 }
 
+// A short label for an AutoSupport case (node · type · time).
+function asupLabel(c) {
+  if (!c) return "case";
+  const node = c.node || c.cluster || c.id.slice(0, 6);
+  const t = c.generated_on || c.loaded_at || "";
+  return `${node}${c.asup_type ? " · " + c.asup_type : ""}${t ? " · " + t : ""}`;
+}
+
 function groupByBase(paths) {
   const map = new Map();
   for (const p of paths) {
@@ -23,16 +31,38 @@ function groupByBase(paths) {
   return [...map.entries()].map(([base, files]) => ({ base, files }));
 }
 
-export default function CompareControls({ caseId, comp, paths }) {
+// Find the path of the same-named file inside another case, preferring the
+// candidate that shares the longest trailing path with the reference file.
+async function findSameNamed(targetCaseId, refPath) {
+  const base = baseName(refPath);
+  const r = await api.searchFilenames(targetCaseId, base).catch(() => ({ results: [] }));
+  const cands = (r.results || []).filter((x) => baseName(x.path).toLowerCase() === base.toLowerCase());
+  if (!cands.length) return null;
+  const refSegs = refPath.toLowerCase().split("/");
+  let best = cands[0], bestScore = -1;
+  for (const c of cands) {
+    const segs = c.path.toLowerCase().split("/");
+    let s = 0;
+    while (s < segs.length && s < refSegs.length &&
+           segs[segs.length - 1 - s] === refSegs[refSegs.length - 1 - s]) s++;
+    if (s > bestScore) { bestScore = s; best = c; }
+  }
+  return best.path;
+}
+
+export default function CompareControls({ caseId, comp, paths, cases = [] }) {
   const groups = useMemo(() => groupByBase(paths), [paths]);
   const dupGroups = groups.filter((g) => g.files.length >= 2);
   const hasDup = dupGroups.length > 0;
-  const target = dupGroups.length ? dupGroups[0].files : paths;
 
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(false);          // compare modal
+  const [items, setItems] = useState(null);         // [{caseId, comp, path, label}]
   const [showPrompt, setShowPrompt] = useState(false);
+  const [pickOpen, setPickOpen] = useState(false);  // cross-autosupport picker
   const [dismissedSig, setDismissedSig] = useState(null);
   const sig = paths.slice().sort().join("|");
+
+  const curCase = cases.find((c) => c.id === caseId);
 
   useEffect(() => {
     if (hasDup && sig !== dismissedSig && !open) setShowPrompt(true);
@@ -40,10 +70,49 @@ export default function CompareControls({ caseId, comp, paths }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig, hasDup]);
 
+  // Items for same-named files within the current selection.
+  const dupItems = () => dupGroups[0].files.map((p) => ({
+    caseId, comp, path: p, label: labelFor(p),
+  }));
+
+  const startCompare = () => {
+    if (hasDup) { setItems(dupItems()); setOpen(true); return; }
+    if (paths.length >= 2) {
+      setItems(paths.map((p) => ({ caseId, comp, path: p, label: labelFor(p) }))); setOpen(true); return;
+    }
+    // Exactly one file and nothing to compare with → pick another AutoSupport.
+    setPickOpen(true);
+  };
+
+  // Resolve same-named files from the chosen cases and open the comparison.
+  const compareAcross = async (targetCaseIds) => {
+    const ref = paths[0];
+    const out = [{
+      caseId, comp, path: ref,
+      label: asupLabel(curCase) || labelFor(ref),
+    }];
+    const misses = [];
+    for (const tid of targetCaseIds) {
+      const found = await findSameNamed(tid, ref);
+      const tc = cases.find((c) => c.id === tid);
+      if (found) out.push({ caseId: tid, comp: null, path: found, label: asupLabel(tc) });
+      else misses.push(asupLabel(tc));
+    }
+    setPickOpen(false);
+    if (out.length < 2) {
+      alert(`No file named "${baseName(ref)}" was found in the selected AutoSupport(s).`);
+      return;
+    }
+    setItems(out);
+    setOpen(true);
+    if (misses.length) setTimeout(() => {}, 0);
+  };
+
   return (
     <>
-      <button className="btn" disabled={paths.length < 2} onClick={() => setOpen(true)}>
-        Compare ({dupGroups.length ? dupGroups[0].files.length : paths.length})
+      <button className="btn" disabled={paths.length < 1} onClick={startCompare}
+        title={paths.length === 1 ? "Compare this file against the same file in another AutoSupport" : "Compare selected files"}>
+        Compare {paths.length > 1 ? `(${hasDup ? dupGroups[0].files.length : paths.length})` : "↔"}
       </button>
 
       {showPrompt && (
@@ -55,42 +124,129 @@ export default function CompareControls({ caseId, comp, paths }) {
               Load and compare them?
             </p>
             <div className="toolbar">
-              <button className="btn primary" onClick={() => { setShowPrompt(false); setOpen(true); }}>Compare</button>
+              <button className="btn primary" onClick={() => { setShowPrompt(false); setItems(dupItems()); setOpen(true); }}>Compare</button>
               <button className="btn" onClick={() => { setShowPrompt(false); setDismissedSig(sig); }}>Not now</button>
             </div>
           </div>
         </div>
       )}
 
-      {open && <CompareModal caseId={caseId} comp={comp} paths={target} onClose={() => setOpen(false)} />}
+      {pickOpen && (
+        <AsupPicker base={baseName(paths[0] || "")} refPath={paths[0]}
+          cases={cases.filter((c) => c.id !== caseId)}
+          onCancel={() => setPickOpen(false)} onCompare={compareAcross} />
+      )}
+
+      {open && items && <CompareModal items={items} onClose={() => { setOpen(false); setItems(null); }} />}
     </>
   );
 }
 
-function CompareModal({ caseId, comp, paths, onClose }) {
+// Dialog to choose one or more other AutoSupports (via the same recursive
+// case → cluster → node → autosupport tree as History) whose same-named file
+// will be auto-selected and compared against the current file.
+function AsupPicker({ base, refPath, cases, onCancel, onCompare }) {
+  const [sel, setSel] = useState(new Set());
+  const [busy, setBusy] = useState(false);
+  const tree = useMemo(() => buildCaseTree(cases), [cases]);
+  const allKeys = useMemo(() => collectTreeKeys(tree), [tree]);
+  const defaultKeys = useMemo(() => collectKeysByKind(tree, ["case", "cluster"]), [tree]);
+  const [expanded, setExpanded] = useState(() => new Set(defaultKeys));
+  const toggleExp = (k) => setExpanded((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const allOpen = allKeys.length > 0 && allKeys.every((k) => expanded.has(k));
+  const toggleCase = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const go = async () => { setBusy(true); await onCompare([...sel]); setBusy(false); };
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal priority" style={{ width: "min(560px,94vw)" }} onClick={(e) => e.stopPropagation()}>
+        <div className="content-toolbar">
+          <b style={{ flex: 1 }}>Compare <span className="mono">{base}</span> with another AutoSupport</b>
+          <button className="icon-btn" onClick={onCancel}>Close</button>
+        </div>
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+          Pick the AutoSupport(s) to compare against (case → cluster → node → autosupport).
+          The same-named file (<span className="mono">{base}</span>) is selected automatically.
+        </p>
+        {cases.length === 0 ? <div className="empty-state">No other AutoSupports are loaded.</div> : (
+          <>
+            <div className="toolbar" style={{ marginBottom: 6 }}>
+              <span className="muted" style={{ fontSize: 12, flex: 1 }}>{sel.size} selected</span>
+              <ExpandToggle expanded={allOpen}
+                onExpandAll={() => setExpanded(new Set(allKeys))}
+                onCollapseAll={() => setExpanded(new Set())} />
+            </div>
+            <div className="case-tree" style={{ maxHeight: "48vh" }}>
+              {tree.map((n) => (
+                <PickNode key={n.key} node={n} depth={0} expanded={expanded} toggleExp={toggleExp}
+                  sel={sel} toggleCase={toggleCase} />
+              ))}
+            </div>
+            <div className="toolbar" style={{ marginTop: 10 }}>
+              <button className="btn primary" disabled={!sel.size || busy} onClick={go}>
+                {busy ? "Finding & comparing…" : `Compare (${sel.size})`}
+              </button>
+              <button className="btn" onClick={onCancel}>Cancel</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// One node of the picker tree; leaves are individual AutoSupports (selectable).
+function PickNode({ node, depth, expanded, toggleExp, sel, toggleCase }) {
+  const open = expanded.has(node.key);
+  return (
+    <div>
+      <div className="case-tree-row" style={{ paddingLeft: depth * 18 + 8 }} onClick={() => toggleExp(node.key)}>
+        <span className={`tree-chev ${open ? "open" : ""}`}>▶</span>
+        <span className="case-tree-label">{TREE_ICON[node.kind]} {node.label}</span>
+        <span className="muted case-tree-count">{countAsup(node)} ASUP</span>
+      </div>
+      {open && (node.children || []).map((ch) => (
+        <PickNode key={ch.key} node={ch} depth={depth + 1} expanded={expanded} toggleExp={toggleExp}
+          sel={sel} toggleCase={toggleCase} />
+      ))}
+      {open && (node.cases || []).map((c) => (
+        <label key={c.id} className="case-tree-row leaf" style={{ paddingLeft: (depth + 1) * 18 + 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggleCase(c.id)} />
+          {c.asup_type && <span className={`chip asup-type ${asupTypeClass(c.asup_type)}`} style={{ minWidth: 70 }}>{c.asup_type}</span>}
+          <span className="case-tree-label mono">🕑 {c.generated_on || c.loaded_at || "(unknown time)"}</span>
+          <span className="muted case-tree-count">{fmtBytes(c.size_bytes)}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function CompareModal({ items, onClose }) {
   const [loaded, setLoaded] = useState(null);
   const [err, setErr] = useState(null);
-  const xmlMode = paths.every(isXmlPath);
+  const xmlMode = items.every((it) => isXmlPath(it.path));
+  const sig = items.map((it) => it.caseId + ":" + it.path).join("|");
 
   useEffect(() => {
     setLoaded(null); setErr(null);
-    const load = async (p) => {
-      if (xmlMode) return { label: labelFor(p), path: p, data: await api.xmlTable(caseId, p, comp) };
-      const data = isEmsPath(p)
-        ? await api.emsLog(caseId, p, comp)
-        : await api.parsePaths(caseId, { paths: [p] });
-      return { label: labelFor(p), path: p, data };
+    const load = async (it) => {
+      if (xmlMode) return { label: it.label, path: it.path, data: await api.xmlTable(it.caseId, it.path, it.comp) };
+      const data = isEmsPath(it.path)
+        ? await api.emsLog(it.caseId, it.path, it.comp)
+        : await api.parsePaths(it.caseId, { paths: [it.path] });
+      return { label: it.label, path: it.path, data };
     };
-    Promise.all(paths.map(load))
+    Promise.all(items.map(load))
       .then((r) => setLoaded(uniqueLabels(r)))
       .catch((e) => setErr(String(e.message || e)));
-  }, [caseId, comp, paths.join("|")]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal priority" style={{ width: "min(1100px,96vw)" }} onClick={(e) => e.stopPropagation()}>
         <div className="content-toolbar">
-          <b style={{ flex: 1 }}>Compare · {baseName(paths[0])} · {paths.length} files</b>
+          <b style={{ flex: 1 }}>Compare · {baseName(items[0].path)} · {items.length} files</b>
           <button className="icon-btn" onClick={onClose}>Close</button>
         </div>
         {err && <div className="error-text">{err}</div>}

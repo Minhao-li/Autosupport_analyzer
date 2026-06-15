@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./lib/api.js";
-import { fmtBytes, verticalColor as vColor, caseLabel, ExpandToggle } from "./lib/helpers.jsx";
+import { fmtBytes, verticalColor as vColor, caseLabel, ExpandToggle, buildCaseTree, countAsup, collectTreeKeys, collectKeysByKind, asupTypeClass, TREE_ICON as SHARED_TREE_ICON } from "./lib/helpers.jsx";
 import Login from "./views/Login.jsx";
 import ComponentView from "./views/ComponentView.jsx";
 import SearchView from "./views/SearchView.jsx";
@@ -335,7 +335,7 @@ export default function App() {
               : <Dropzone onLoadGroups={onLoadGroups} onLoadStingray={onLoadStingray} uploading={uploading} cases={cases} onPick={setCaseId} onDelete={onDelete} isAdmin={account.is_admin} />
           )}
           {view.kind === "component" && (caseId
-            ? <ComponentView caseId={caseId} comp={view.comp} compName={view.name} vertical={view.vertical} initialFilter={view.q || ""} key={caseId + view.comp + (view.q || "")} />
+            ? <ComponentView caseId={caseId} comp={view.comp} compName={view.name} vertical={view.vertical} initialFilter={view.q || ""} cases={cases} key={caseId + view.comp + (view.q || "")} />
             : <div className="empty-state">Load a case first.</div>)}
           {view.kind === "clusters" && <ClusterTopologyView
             onOpenCase={(id) => { setCaseId(id); setView({ kind: "home" }); }}
@@ -346,7 +346,7 @@ export default function App() {
           {view.kind === "snapshot" && (caseId ? <SnapshotView caseId={caseId} key={caseId} /> : <NeedCase />)}
           {view.kind === "topology" && <TopologyView activeCase={activeCase} key="topology" />}
           {view.kind === "asup" && <AsupView caseId={caseId} cases={cases} isAdmin={account.is_admin} onPickCase={setCaseId} key={caseId || "none"} />}
-          {view.kind === "autosupport" && (caseId ? <AutoSupportView caseId={caseId} key={caseId} /> : <NeedCase />)}
+          {view.kind === "autosupport" && (caseId ? <AutoSupportView caseId={caseId} cases={cases} key={caseId} /> : <NeedCase />)}
           {view.kind === "admin" && account.is_admin && <AdminView plugins={plugins} />}
         </main>
       </div>
@@ -394,61 +394,9 @@ function LoadProgress({ phase, detail, done, total, label }) {
 
 // Group the flat case list into a recursive tree:
 //   case number → cluster name → node name → AutoSupport (by time).
-function buildCaseTree(cases) {
-  const root = [];
-  const find = (arr, key, label, kind) => {
-    let n = arr.find((x) => x.key === key);
-    if (!n) { n = { key, label, kind, children: [], cases: [] }; arr.push(n); }
-    return n;
-  };
-  for (const c of cases) {
-    const cn = c.case_number || "(no case #)";
-    const cl = c.cluster || "(no cluster)";
-    const nd = c.node || "(no node)";
-    const k1 = `c:${cn}`;
-    const n1 = find(root, k1, cn, "case");
-    const k2 = `${k1}|cl:${cl}`;
-    const n2 = find(n1.children, k2, cl, "cluster");
-    const n3 = find(n2.children, `${k2}|n:${nd}`, nd, "node");
-    n3.cases.push(c);
-  }
-  return root;
-}
-
-function countAsup(node) {
-  return (node.cases ? node.cases.length : 0) +
-    (node.children || []).reduce((a, c) => a + countAsup(c), 0);
-}
-
-function collectTreeKeys(nodes, acc = []) {
-  for (const n of nodes) { acc.push(n.key); collectTreeKeys(n.children || [], acc); }
-  return acc;
-}
-
-// Keys for nodes of the given kinds (e.g. default-expand case+cluster levels).
-function collectKeysByKind(nodes, kinds, acc = []) {
-  for (const n of nodes) {
-    if (kinds.includes(n.kind)) acc.push(n.key);
-    collectKeysByKind(n.children || [], kinds, acc);
-  }
-  return acc;
-}
-
-const TREE_ICON = { case: "🗂", cluster: "🧩", node: "🖥" };
+const TREE_ICON = SHARED_TREE_ICON;
 
 // Map an AutoSupport type to a colour class (semantic, consistent colours).
-function asupTypeClass(t) {
-  const s = (t || "").toLowerCase();
-  if (s.includes("weekly")) return "at-weekly";
-  if (s.includes("full") || s.includes("user-trigger") || s.includes("trigger")) return "at-full";
-  if (s.includes("management")) return "at-mgmt";
-  if (s.includes("performance")) return "at-perf";
-  if (s.includes("daily") || s.includes("nightly") || s.includes("periodic")) return "at-daily";
-  if (s.includes("boot")) return "at-boot";
-  if (s.includes("spares") || s.includes("low") || s.includes("error") || s.includes("fail")) return "at-alert";
-  return "at-other";
-}
-
 function CaseTreeNode({ node, depth, expanded, toggle, caseId, isAdmin, onPick, onDelete }) {
   const open = expanded.has(node.key);
   return (
