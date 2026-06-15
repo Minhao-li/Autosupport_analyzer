@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "AIQ_Token_Capture_extention",
+  "version": "2.0.0",
+  "description": "Auto-captures the NetApp ActiveIQ bearer token and forwards it to Autosupport Analyzer.",
+  "permissions": ["webRequest", "storage"],
+  "host_permissions": [
+    "https://api.activeiq.netapp.com/*",
+    "https://apigtwyapps.netapp.com/*",
+    "https://aiq.netapp.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://10.216.43.66/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "AIQ Token Capture" }
+}

@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+backend/data/
+backend/static/
+
+# Node / build
+frontend/node_modules/
+frontend/dist/
+
+# misc
+*.log
+.DS_Store
