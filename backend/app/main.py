@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, constr
 
-from . import auth, cases, parsing, plugins, topology, cluster, jobs
+from . import auth, cases, parsing, plugins, topology, cluster, jobs, mlog
 from .asup_xml import parse_asup_xml
 from .ems_log import parse_ems_log
 from .mgwd_log import parse_mgwd_log
@@ -670,6 +670,32 @@ def api_autosupport_files(case_id: str):
             "collection": coll,
         })
     return {"files": out, "count": len(out)}
+
+
+@app.get("/api/cases/{case_id}/mlogs")
+def api_mlogs(case_id: str):
+    """List the mlog (mroot/etc/log/mlog) files of a case, grouped by log family
+    (rotation-independent base name)."""
+    root = _require_case_root(case_id)
+    families = mlog.classify(root)
+    return {"families": families, "family_count": len(families),
+            "file_count": sum(f["count"] for f in families),
+            "total_size": sum(f["size"] for f in families)}
+
+
+@app.get("/api/cases/{case_id}/mlogs/analyze")
+def api_mlogs_analyze(case_id: str, max_files: int = 40):
+    """Classify and analyze every mlog family: per-family severity breakdown,
+    line totals, time range and notable samples."""
+    root = _require_case_root(case_id)
+    return mlog.analyze_all(root, max_files_per_family=max_files)
+
+
+@app.get("/api/cases/{case_id}/mlogs/family/analyze")
+def api_mlogs_family_analyze(case_id: str, family: str, max_files: int = 40):
+    """Analyze a single mlog family in detail (more samples)."""
+    root = _require_case_root(case_id)
+    return mlog.analyze_family(root, family, max_files=max_files)
 
 
 @app.get("/api/cases/{case_id}/component_index")
