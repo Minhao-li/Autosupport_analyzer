@@ -173,6 +173,7 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
                     <th>AutoSupport ID</th>
                     <th>Node</th>
                     <th>Type</th>
+                    <th>Title</th>
                     <th>Generated</th>
                   </tr>
                 </thead>
@@ -183,6 +184,7 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
                       <td className="mono">{a.asup_id}</td>
                       <td>{a.node || "—"}</td>
                       <td>{a.asup_type || "—"}</td>
+                      <td>{a.subject || "—"}</td>
                       <td>{a.generated_on || "—"}</td>
                     </tr>
                   ))}

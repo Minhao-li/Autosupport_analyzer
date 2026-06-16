@@ -1253,8 +1253,8 @@ def _parse_date_field(v):
 
 _NODE_KEYS = ("hostname", "host_name", "node", "node_name", "nodename",
               "sys_name", "system_name", "controller")
-_TYPE_KEYS = ("asup_type", "asuptype", "type", "asup_subject", "subject",
-              "trigger", "trigger_type")
+_TYPE_KEYS = ("asup_type", "asuptype", "type", "trigger", "trigger_type")
+_SUBJECT_KEYS = ("asup_subject", "subject", "title", "asup_title")
 _SYS_KEYS = ("system_id", "systemid", "sys_id", "sysid")
 _PARTNER_KEYS = ("partner_system_id", "partnersystemid", "partner_id")
 _CLUSTER_KEYS = ("cluster_uuid", "cluster_id", "clusteruuid", "clusterid")
@@ -1277,7 +1277,7 @@ def _extract_asup_entries(data, text: str):
     entries, seen = [], set()
 
     def add(asup_id, gen, node=None, atype=None, sys_id=None,
-            partner=None, cluster=None, serial=None):
+            partner=None, cluster=None, serial=None, subject=None):
         sid = str(asup_id).strip()
         if not _looks_like_asup_id(sid) or sid in seen:
             return
@@ -1288,6 +1288,7 @@ def _extract_asup_entries(data, text: str):
             "generated_on": gen if gen else (dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None),
             "node": str(node).strip() if node else None,
             "asup_type": str(atype).strip() if atype else None,
+            "subject": str(subject).strip() if subject else None,
             "system_id": str(sys_id).strip() if sys_id else None,
             "partner_system_id": str(partner).strip() if partner else None,
             "cluster_uuid": str(cluster).strip() if cluster else None,
@@ -1304,7 +1305,8 @@ def _extract_asup_entries(data, text: str):
                 pick = lambda keys: next((obj[lower[k]] for k in keys if k in lower and obj[lower[k]]), None)
                 cluster = pick(_CLUSTER_KEYS) or _cluster_uuid_from_bizkey(obj.get(lower.get("biz_key", "")))
                 add(id_val, pick(_DATE_KEYS), pick(_NODE_KEYS), pick(_TYPE_KEYS),
-                    pick(_SYS_KEYS), pick(_PARTNER_KEYS), cluster, pick(_SERIAL_KEYS))
+                    pick(_SYS_KEYS), pick(_PARTNER_KEYS), cluster, pick(_SERIAL_KEYS),
+                    pick(_SUBJECT_KEYS))
             for v in obj.values():
                 visit(v)
         elif isinstance(obj, list):
@@ -1449,7 +1451,7 @@ def asup_download_list(body: AsupListIn):
                                  -(e.get("_dt") or datetime.min.replace(tzinfo=timezone.utc)).timestamp()))
     out = [{"asup_id": e["asup_id"], "generated_on": e["generated_on"],
             "node": e.get("node"), "asup_type": e.get("asup_type"),
-            "serial": e.get("serial")} for e in filtered]
+            "subject": e.get("subject"), "serial": e.get("serial")} for e in filtered]
     node_list = sorted({n for n, _ in nodes if n})
     return {"url": url, "count": len(out), "total": len(entries),
             "nodes": node_list, "node_count": len(node_list),
