@@ -1447,8 +1447,8 @@ def asup_download_list(body: AsupListIn):
         return True
 
     filtered = [e for e in entries if in_range(e)]
-    filtered.sort(key=lambda e: ((e.get("node") or ""),
-                                 -(e.get("_dt") or datetime.min.replace(tzinfo=timezone.utc)).timestamp()))
+    filtered.sort(key=lambda e: (e.get("_dt") or datetime.min.replace(tzinfo=timezone.utc)),
+                  reverse=True)
     out = [{"asup_id": e["asup_id"], "generated_on": e["generated_on"],
             "node": e.get("node"), "asup_type": e.get("asup_type"),
             "subject": e.get("subject"), "serial": e.get("serial")} for e in filtered]

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.js";
+import { asupTypeClass } from "../lib/helpers.jsx";
 
 const AIQ_URL = "https://aiq.netapp.com/asup-upload";
 
@@ -183,7 +184,9 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
                       <td><input type="checkbox" checked={sel.has(a.asup_id)} onChange={() => toggle(a.asup_id)} /></td>
                       <td className="mono">{a.asup_id}</td>
                       <td>{a.node || "—"}</td>
-                      <td>{a.asup_type || "—"}</td>
+                      <td>{a.asup_type
+                        ? <span className={`chip asup-type ${asupTypeClass(`${a.subject || ""} ${a.asup_type}`)}`}>{a.asup_type}</span>
+                        : "—"}</td>
                       <td>{a.subject || "—"}</td>
                       <td>{a.generated_on || "—"}</td>
                     </tr>
