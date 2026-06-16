@@ -101,12 +101,12 @@ export default function MlogsView({ caseId, cases = [], onPickCase, pollJob }) {
   return (
     <div>
       <h2 className="content-title">Mlogs — {activeCase ? (activeCase.node || activeCase.case_number || caseId) : caseId}</h2>
-      <p className="content-subtitle">Load the <span className="mono">mroot/etc/log/mlog</span> files from a SEPARATE log bundle for this node, then read them classified by family.</p>
+      <p className="content-subtitle">mlog files (<span className="mono">mroot/etc/log/mlog</span>) are loaded automatically when an AutoSupport bundle that contains them is loaded, classified by log family below. You can also add more from a separate bundle.</p>
 
       <div className="card" style={{ marginBottom: 10 }}>
-        <b>Load mlog bundle</b>
+        <b>Add mlog files (optional)</b>
         <div className="info-text" style={{ fontSize: 12, margin: "4px 0 8px" }}>
-          Upload a node log bundle (<span className="mono">.tgz</span> / <span className="mono">.zip</span> / <span className="mono">.7z</span> containing <span className="mono">mroot/etc/log/mlog/</span>) or pick that folder. Only the mlog subtree is imported.
+          If this AutoSupport was loaded without its mlog folder, upload a node log bundle (<span className="mono">.tgz</span> / <span className="mono">.zip</span> / <span className="mono">.7z</span> containing <span className="mono">mroot/etc/log/mlog/</span>) or pick that folder. Only the mlog subtree is imported.
         </div>
         <div className="toolbar" style={{ flexWrap: "wrap" }}>
           <label className="btn primary">

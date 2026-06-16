@@ -434,6 +434,7 @@ def _build_cases_from_stage(stage: str, source: str, case_number: str, jid: str 
             jobs.update(jid, done=1, total=1)
         return cases.case_to_dict(row)
     created = []
+    created_dirs = []
     total = len(roots)
     for i, r in enumerate(roots, 1):
         if jid:
@@ -444,9 +445,19 @@ def _build_cases_from_stage(stage: str, source: str, case_number: str, jid: str 
         shutil.move(r, dest)
         row = cases.save_case(cid, source, dest, case_number=case_number)
         created.append(cases.case_to_dict(row))
+        created_dirs.append(dest)
         if jid:
             jobs.update(jid, done=i, total=total,
                         detail=f"{cases.case_to_dict(row).get('node') or 'node'} ({i}/{total})")
+    # Pull in any mlog/ directory that lived OUTSIDE the per-node AutoSupport
+    # roots (e.g. a sibling log folder) so it loads alongside the AutoSupport.
+    if created_dirs:
+        try:
+            n = mlog.import_mlog_tree(stage, os.path.join(created_dirs[0], "_mlog_import"))
+            if n and jid:
+                jobs.update(jid, detail=f"imported {n} mlog file(s)")
+        except Exception:
+            pass
     shutil.rmtree(stage, ignore_errors=True)
     return {"multi": True, "count": len(created), "cases": created}
 
