@@ -135,6 +135,22 @@ class AiqUploadIn(BaseModel):
     submitter: Optional[str] = None
 
 
+class DownloadConfigIn(BaseModel):
+    download_url: Optional[str] = None   # base for asup-download/asup_id
+    search_url: Optional[str] = None     # list/search template (may contain {query})
+
+
+class AsupListIn(BaseModel):
+    query: str = ""
+    date_from: Optional[str] = None      # YYYY-MM-DD (inclusive)
+    date_to: Optional[str] = None        # YYYY-MM-DD (inclusive)
+
+
+class AsupDownloadIn(BaseModel):
+    asup_ids: list[str] = []
+    case_number: Optional[str] = None
+
+
 # ----------------------------- helpers -----------------------------
 def _now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -1075,6 +1091,14 @@ def api_stingray_inventory(case_num: str):
 DEFAULT_AIQ_UPLOAD_BASE = (
     "https://apigtwyapps.netapp.com/aiq/api/raw-asup-uploader/manual_asup_upload"
 )
+DEFAULT_AIQ_DOWNLOAD_BASE = (
+    "https://apigtwyapps.netapp.com/aiq/api/asup-viewer/v0/asup-download/asup_id"
+)
+# Template used to fetch the AutoSupport list for a query (serial / case number).
+# {query} is substituted with the URL-encoded query. The smartsolve URL below is
+# the browser search page; point this at the JSON search API that backs it (or
+# any endpoint returning ASUP ids) to enable server-side listing.
+DEFAULT_AIQ_SEARCH_URL = "https://smartsolve.netapp.com/#search?query={query}"
 
 
 def _get_setting(key, default=None):
@@ -1134,6 +1158,264 @@ def asup_set_upload_url(body: UploadUrlIn):
         return {"ok": True, "url": DEFAULT_AIQ_UPLOAD_BASE, "custom": False}
     _set_setting("asup_upload_url", url)
     return {"ok": True, "url": url, "custom": True}
+
+
+# ------- asup download / load -------
+def _download_base() -> str:
+    return (_get_setting("asup_download_url") or os.environ.get("SLA_AIQ_DOWNLOAD_URL")
+            or DEFAULT_AIQ_DOWNLOAD_BASE).strip().rstrip("/")
+
+
+def _search_url() -> str:
+    return (_get_setting("asup_search_url") or os.environ.get("SLA_AIQ_SEARCH_URL")
+            or DEFAULT_AIQ_SEARCH_URL).strip()
+
+
+@app.get("/api/asup/download/config")
+def asup_get_download_config():
+    return {
+        "download_url": _download_base(),
+        "search_url": _search_url(),
+        "download_default": DEFAULT_AIQ_DOWNLOAD_BASE,
+        "search_default": DEFAULT_AIQ_SEARCH_URL,
+    }
+
+
+@app.post("/api/asup/download/config")
+def asup_set_download_config(body: DownloadConfigIn):
+    if body.download_url is not None:
+        v = body.download_url.strip()
+        if v:
+            _set_setting("asup_download_url", v)
+        else:
+            with get_db() as db:
+                db.execute("DELETE FROM settings WHERE key='asup_download_url'")
+                db.commit()
+    if body.search_url is not None:
+        v = body.search_url.strip()
+        if v:
+            _set_setting("asup_search_url", v)
+        else:
+            with get_db() as db:
+                db.execute("DELETE FROM settings WHERE key='asup_search_url'")
+                db.commit()
+    return {"ok": True, "download_url": _download_base(), "search_url": _search_url()}
+
+
+_ID_KEYS = ("asup_id", "asupid", "asup", "sequence", "seq_num", "seqno", "seq", "id")
+_DATE_KEYS = ("generated_on", "generatedon", "date_generated", "gen_date",
+              "generated", "collection_date", "asup_date", "timestamp",
+              "created", "created_on", "date", "received", "received_on")
+
+
+def _looks_like_asup_id(v) -> bool:
+    s = str(v).strip()
+    return s.isdigit() and 8 <= len(s) <= 20
+
+
+def _asup_id_datetime(asup_id: str):
+    """Best-effort datetime for a time-based ASUP id (epoch s/ms, or YYYYMMDD…)."""
+    s = str(asup_id).strip()
+    if not s.isdigit():
+        return None
+    try:
+        if len(s) == 13:                       # epoch milliseconds
+            return datetime.fromtimestamp(int(s) / 1000, timezone.utc)
+        if len(s) == 10:                       # epoch seconds
+            return datetime.fromtimestamp(int(s), timezone.utc)
+        if len(s) >= 8:                        # leading YYYYMMDD
+            return datetime(int(s[0:4]), int(s[4:6]), int(s[6:8]), tzinfo=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+    return None
+
+
+def _parse_date_field(v):
+    if v in (None, ""):
+        return None
+    s = str(v).strip()
+    if s.isdigit():
+        return _asup_id_datetime(s)
+    s = s.replace("Z", "+00:00")
+    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d"):
+        try:
+            return datetime.fromisoformat(s) if fmt is None else datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_asup_entries(data, text: str):
+    """Pull {asup_id, generated_on} pairs out of an arbitrary JSON or text body."""
+    entries, seen = [], set()
+
+    def add(asup_id, gen):
+        sid = str(asup_id).strip()
+        if not _looks_like_asup_id(sid) or sid in seen:
+            return
+        seen.add(sid)
+        dt = _parse_date_field(gen) or _asup_id_datetime(sid)
+        entries.append({
+            "asup_id": sid,
+            "generated_on": gen if gen else (dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None),
+            "_dt": dt,
+        })
+
+    def visit(obj):
+        if isinstance(obj, dict):
+            lower = {str(k).lower(): k for k in obj}
+            id_val = next((obj[lower[k]] for k in _ID_KEYS
+                           if k in lower and _looks_like_asup_id(obj[lower[k]])), None)
+            if id_val is not None:
+                gen = next((obj[lower[k]] for k in _DATE_KEYS if k in lower and obj[lower[k]]), None)
+                add(id_val, gen)
+            for v in obj.values():
+                visit(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                visit(v)
+
+    if data is not None:
+        visit(data)
+    if not entries and text:
+        for m in re.findall(r'asup[_-]?id["\'/:\s]+(\d{8,20})', text, re.I):
+            add(m, None)
+    return entries
+
+
+def _http_get(url: str, token: str | None, timeout: int = 60):
+    import urllib.request
+    headers = {"Accept": "application/json, */*"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, method="GET", headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(), resp.headers
+
+
+@app.post("/api/asup/download/list")
+def asup_download_list(body: AsupListIn):
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="A search query (serial / case number) is required")
+    token = _get_setting("asup_token")
+    tmpl = _search_url()
+    import urllib.error
+    from urllib.parse import quote
+    url = tmpl.replace("{query}", quote(query)) if "{query}" in tmpl else (
+        tmpl + ("&" if "?" in tmpl else "?") + "query=" + quote(query))
+    try:
+        raw, _ = _http_get(url, token, timeout=60)
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read(500).decode("utf-8", "replace")
+        except Exception:
+            pass
+        raise HTTPException(status_code=502,
+                            detail=f"Search failed: HTTP {e.code} {e.reason} {detail}".strip())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Search failed: {e}")
+
+    text = raw.decode("utf-8", "replace")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    entries = _extract_asup_entries(data, text)
+
+    def in_range(e):
+        dt = e.get("_dt")
+        if dt is None:
+            return True
+        d = dt.date()
+        if body.date_from:
+            try:
+                if d < datetime.strptime(body.date_from, "%Y-%m-%d").date():
+                    return False
+            except ValueError:
+                pass
+        if body.date_to:
+            try:
+                if d > datetime.strptime(body.date_to, "%Y-%m-%d").date():
+                    return False
+            except ValueError:
+                pass
+        return True
+
+    filtered = [e for e in entries if in_range(e)]
+    filtered.sort(key=lambda e: (e.get("_dt") or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    out = [{"asup_id": e["asup_id"], "generated_on": e["generated_on"]} for e in filtered]
+    return {"url": url, "count": len(out), "total": len(entries), "asups": out}
+
+
+def _archive_ext_for(data: bytes, disposition: str = "") -> str:
+    if disposition:
+        m = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)', disposition, re.I)
+        if m and cases.is_archive(m.group(1).strip()):
+            low = m.group(1).strip().lower()
+            for ext in (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".7z", ".zip", ".tar"):
+                if low.endswith(ext):
+                    return ext
+    if data[:6] == b"7z\xbc\xaf\x27\x1c":
+        return ".7z"
+    if data[:2] == b"\x1f\x8b":
+        return ".tgz"
+    if data[:3] == b"BZh":
+        return ".tar.bz2"
+    if data[:6] == b"\xfd7zXZ\x00":
+        return ".tar.xz"
+    if data[:4] == b"PK\x03\x04":
+        return ".zip"
+    if len(data) > 262 and data[257:262] == b"ustar":
+        return ".tar"
+    return ".tgz"
+
+
+@app.post("/api/asup/download/load")
+def asup_download_load(body: AsupDownloadIn):
+    token = _get_setting("asup_token")
+    if not token:
+        raise HTTPException(status_code=400, detail="No AIQ token set — authenticate first")
+    ids = [str(i).strip() for i in (body.asup_ids or []) if str(i).strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="At least one AutoSupport id is required")
+    base = _download_base()
+    cn = (body.case_number or ids[0]).strip()
+
+    stage = os.path.join(str(CASES_DIR), "_stage_" + cases.new_case_id())
+    os.makedirs(stage, exist_ok=True)
+    jid = jobs.new_job(label=f"ASUP download ({len(ids)})")
+
+    def work():
+        import urllib.error
+        try:
+            total = len(ids)
+            got = 0
+            for i, aid in enumerate(ids, 1):
+                jobs.update(jid, phase="Downloading AutoSupport…",
+                            detail=f"{aid} ({i}/{total})", done=i - 1, total=total)
+                url = f"{base}/{aid}?system_state=all&product_type=all"
+                try:
+                    data, headers = _http_get(url, token, timeout=600)
+                except urllib.error.HTTPError as e:
+                    raise ValueError(f"Download of {aid} failed: HTTP {e.code} {e.reason}")
+                ext = _archive_ext_for(data, headers.get("Content-Disposition", ""))
+                with open(os.path.join(stage, f"asup_{aid}{ext}"), "wb") as f:
+                    f.write(data)
+                got += 1
+            if not got:
+                raise ValueError("No AutoSupports were downloaded")
+            jobs.update(jid, phase="Peeling archives…", detail="", done=total, total=total)
+            cases.extract_all_nested(stage, on_event=_peel_event(jid))
+            result = _build_cases_from_stage(stage, "download", cn, jid=jid)
+            jobs.finish(jid, result=result)
+        except Exception as e:
+            shutil.rmtree(stage, ignore_errors=True)
+            jobs.finish(jid, error=str(e))
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": jid}
 
 
 def _capture_key() -> str:

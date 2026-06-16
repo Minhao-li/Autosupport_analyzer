@@ -9,6 +9,7 @@ import TopologyView from "./views/TopologyView.jsx";
 import ClusterTopologyView from "./views/ClusterTopologyView.jsx";
 import ClusterView from "./views/ClusterView.jsx";
 import AsupView from "./views/AsupView.jsx";
+import AsupDownloadView from "./views/AsupDownloadView.jsx";
 import AutoSupportView from "./views/AutoSupportView.jsx";
 import AdminView from "./views/AdminView.jsx";
 import FeedbackModal from "./views/FeedbackModal.jsx";
@@ -27,6 +28,7 @@ const TOP_PAGES = [
   { key: "search", label: "Global search" },
   { key: "topology", label: "Network Topology" },
   { key: "asup", label: "ASUP Upload" },
+  { key: "asupdl", label: "ASUP Download" },
 ];
 
 export default function App() {
@@ -346,6 +348,8 @@ export default function App() {
           {view.kind === "snapshot" && (caseId ? <SnapshotView caseId={caseId} key={caseId} /> : <NeedCase />)}
           {view.kind === "topology" && <TopologyView activeCase={activeCase} key="topology" />}
           {view.kind === "asup" && <AsupView caseId={caseId} cases={cases} isAdmin={account.is_admin} onPickCase={setCaseId} key={caseId || "none"} />}
+          {view.kind === "asupdl" && <AsupDownloadView pollJob={pollJob}
+            onLoaded={(created) => { refreshCases(); if (created && created.length) { setCaseId(created[created.length - 1].id); setView({ kind: created.length > 1 ? "clusters" : "home" }); } }} />}
           {view.kind === "autosupport" && (caseId ? <AutoSupportView caseId={caseId} cases={cases} key={caseId} /> : <NeedCase />)}
           {view.kind === "admin" && account.is_admin && <AdminView plugins={plugins} />}
         </main>

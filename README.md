@@ -45,6 +45,12 @@ Open http://localhost:8011 — the backend serves both the API and the SPA.
    nodes of one cluster); each becomes its own case and they upload concurrently.
 3. Pick a component in the sidebar to list files, parse events, or grep.
 4. Use Global search, Snapshots, Network Topology and ASUP Upload pages.
+   - **ASUP Download** fetches AutoSupports straight from the ASUP-viewer gateway:
+     authenticate (same ActiveIQ token as ASUP Upload — the capture steps are shown
+     on the page), search by serial/case number with an optional time range (ASUP
+     ids are time-based) or paste ASUP id(s) directly, then download &amp; load them
+     into the analyzer as cases. The search/list and download base URLs are
+     configurable on the page (or via `SLA_AIQ_SEARCH_URL` / `SLA_AIQ_DOWNLOAD_URL`).
 5. Open **Cluster Topology** to see loaded AutoSupports auto-grouped by cluster
    and HA pair, with each cluster's nodes and their basic info.
 6. On any event-log view (EMS log, parsed Events), click **📊 Statistics** to get

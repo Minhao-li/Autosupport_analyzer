@@ -120,6 +120,11 @@ export const api = {
   asupUploadAiq: (id, body) => req("POST", `/api/asup/cases/${id}/upload_aiq`, body),
   asupUploadUrl: () => req("GET", "/api/asup/upload-url"),
   setAsupUploadUrl: (url) => req("POST", "/api/asup/upload-url", { url }),
+  // asup download / load
+  asupDownloadConfig: () => req("GET", "/api/asup/download/config"),
+  setAsupDownloadConfig: (body) => req("POST", "/api/asup/download/config", body),
+  asupDownloadList: (body) => req("POST", "/api/asup/download/list", body),
+  asupDownloadLoad: (body) => req("POST", "/api/asup/download/load", body),
   // feedback
   submitFeedback: (body) => req("POST", "/api/feedback", body),
   listFeedback: (params) => req("GET", `/api/feedback${qs(params)}`),
