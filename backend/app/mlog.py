@@ -27,26 +27,9 @@ from . import parsing
 from .mgwd_log import parse_mgwd_log, looks_like_mgwd
 from .sktrace_log import parse_sktrace_log, looks_like_sktrace
 
-# A path is "mlog" when any directory segment is exactly ``mlog`` (full log
-# bundles: mroot/etc/log/mlog/...), OR — for AutoSupports, which flatten the
-# daemon logs to the collection root — the file name is a known daemon log or
-# carries the ``-mlog``/``mlog`` marker (e.g. ``mgwd.gz``, ``messages.log.gz``,
-# ``audit-mlog.txt.gz``, ``sysmgr-mlog.txt.gz``).
+# A path is "mlog" when any directory segment is exactly ``mlog`` — i.e. the
+# files live under ``mroot/etc/log/mlog/`` in a separate log bundle.
 _MLOG_DIR_RE = re.compile(r"(?:^|/)mlog/", re.IGNORECASE)
-
-# Known ONTAP daemon / mlog log families (rotation- and extension-independent).
-KNOWN_DAEMONS = {
-    "mgwd", "messages", "secd", "vifmgr", "notifyd", "spmd", "vldb", "bcomd",
-    "cfmd", "crs", "sysmgr", "servprocd", "ndmpd", "licensed", "fpolicy", "php",
-    "php-fpm.access", "php-fpm.error", "sktrace", "audit", "auditlog", "debug",
-    "hashd", "kmip2_client", "vserverdr", "ypbind", "perfstatd", "cm-daemon",
-    "qpidd", "qdrouterd", "dotsql", "smnlog", "snapmirror", "snapmirror_audit",
-    "snapmirror_error", "snapmirror-audit-log", "snapmirror-error-log",
-    "apache_access", "apache_error", "csm-trace-buffer", "ems-log-file",
-    "ems", "leak-data", "netsetup", "sp-debug", "sp-debug-old", "sp-mgmt",
-    "coresegd", "named", "bgpd", "corefs", "httpd", "command-history",
-    "mhd_stat", "spdebug",
-}
 
 # Rotation / packaging suffixes to strip when reducing a file name to its log
 # family. Order matters; applied repeatedly until stable.
@@ -91,17 +74,11 @@ def family_of(name: str) -> str:
 
 
 def is_mlog_file(rel: str) -> bool:
-    """True for a daemon/mlog log file — either physically under an ``mlog``
-    directory, or an AutoSupport-flattened daemon log at the collection root."""
-    if _MLOG_DIR_RE.search(rel or ""):
-        return True
-    name = (rel or "").rsplit("/", 1)[-1]
-    if not name or name.startswith("."):
-        return False
-    low = name.lower()
-    if "mlog" in low:
-        return True
-    return family_of(name).lower() in KNOWN_DAEMONS
+    """True only for files that physically live under an ``mlog`` directory
+    (e.g. ``mroot/etc/log/mlog/...``). mlog content is loaded from a separate
+    log bundle, NOT taken from the flattened daemon logs inside an AutoSupport
+    collection."""
+    return bool(_MLOG_DIR_RE.search(rel or ""))
 
 
 # Back-compat alias.
@@ -332,3 +309,116 @@ def parse_mlog_file(full: str, max_rows: int = 5000, max_bytes: int = 24_000_000
 
     return {"ok": True, "format": fmt, "rows": rows, "total": total,
             "row_count": len(rows), "truncated": truncated}
+
+
+def _safe_rel(name: str) -> str | None:
+    """Sanitize an archive member path; keep only the ``mlog/<...>`` tail so the
+    imported tree is compact and detection (``/mlog/``) still matches."""
+    rel = (name or "").replace("\\", "/").lstrip("/")
+    parts = [p for p in rel.split("/") if p and p not in (".", "..")]
+    if not parts:
+        return None
+    # Trim everything before the last 'mlog' segment, keeping mlog/<file>.
+    idx = max((i for i, p in enumerate(parts) if p.lower() == "mlog"), default=None)
+    if idx is None:
+        return None
+    return "/".join(parts[idx:])
+
+
+def extract_mlog_members(archive_path: str, dest_dir: str,
+                         on_progress=None, max_files: int = 100000) -> int:
+    """Extract ONLY the files under an ``mlog`` directory from a tar/zip archive
+    into ``dest_dir`` (preserving the ``mlog/<...>`` tail). Returns the count.
+
+    Selective extraction avoids unpacking the (often multi-GB) rest of a log
+    bundle. For .7z, the caller should fall back to a full extract + copy."""
+    import tarfile
+    import zipfile
+
+    low = archive_path.lower()
+    count = 0
+
+    def _emit():
+        if on_progress and count % 50 == 0:
+            on_progress(count)
+
+    if low.endswith((".tgz", ".tar.gz", ".tar", ".tbz", ".tbz2", ".tar.bz2",
+                     ".txz", ".tar.xz")):
+        if low.endswith((".tgz", ".tar.gz")):
+            mode = "r|gz"
+        elif low.endswith((".tbz", ".tbz2", ".tar.bz2")):
+            mode = "r|bz2"
+        elif low.endswith((".txz", ".tar.xz")):
+            mode = "r|xz"
+        else:
+            mode = "r|"
+        # Streaming mode (r|*) reads sequentially without seeking — required for
+        # large gzip bundles where random access would re-read the whole stream.
+        with tarfile.open(archive_path, mode) as t:
+            for m in t:
+                if not m.isfile() or not is_mlog_file(m.name):
+                    continue
+                safe = _safe_rel(m.name)
+                if not safe:
+                    continue
+                out = os.path.join(dest_dir, safe.replace("/", os.sep))
+                if not os.path.abspath(out).startswith(os.path.abspath(dest_dir)):
+                    continue
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                src = t.extractfile(m)
+                if src is None:
+                    continue
+                with open(out, "wb") as fo:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        fo.write(chunk)
+                count += 1
+                _emit()
+                if count >= max_files:
+                    break
+    elif low.endswith(".zip"):
+        with zipfile.ZipFile(archive_path) as z:
+            for name in z.namelist():
+                if name.endswith("/") or not is_mlog_file(name):
+                    continue
+                safe = _safe_rel(name)
+                if not safe:
+                    continue
+                out = os.path.join(dest_dir, safe.replace("/", os.sep))
+                if not os.path.abspath(out).startswith(os.path.abspath(dest_dir)):
+                    continue
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with z.open(name) as src, open(out, "wb") as fo:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        fo.write(chunk)
+                count += 1
+                _emit()
+                if count >= max_files:
+                    break
+    else:
+        return -1  # signal: caller should full-extract + copy (e.g. .7z)
+    return count
+
+
+def import_mlog_tree(src_dir: str, dest_dir: str) -> int:
+    """Copy every ``mlog`` file found anywhere under ``src_dir`` into
+    ``dest_dir`` (preserving the ``mlog/<...>`` tail). Returns the count."""
+    import shutil
+    count = 0
+    for rel, full in parsing.walk_files(src_dir):
+        if not is_mlog_file(rel):
+            continue
+        safe = _safe_rel(rel) or rel.split("/")[-1]
+        out = os.path.join(dest_dir, safe.replace("/", os.sep))
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        try:
+            shutil.copy2(full, out)
+            count += 1
+        except OSError:
+            pass
+    return count

@@ -20,12 +20,14 @@ function SevBar({ counts }) {
   );
 }
 
-export default function MlogsView({ caseId, cases = [], onPickCase }) {
+export default function MlogsView({ caseId, cases = [], onPickCase, pollJob }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
   const [viewer, setViewer] = useState(null); // { path }
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState(null);
 
   const activeCase = useMemo(() => cases.find((c) => c.id === caseId), [cases, caseId]);
 
@@ -42,6 +44,38 @@ export default function MlogsView({ caseId, cases = [], onPickCase }) {
   useEffect(() => { if (caseId) load(); /* eslint-disable-next-line */ }, [caseId]);
 
   const toggle = (fam) => setExpanded((s) => { const n = new Set(s); n.has(fam) ? n.delete(fam) : n.add(fam); return n; });
+
+  // Load mlog files from a SEPARATE bundle (.tgz/.zip/.7z) into this case.
+  const onLoadArchive = async (file) => {
+    if (!file || !caseId) return;
+    setImporting(true); setErr(null); setImportMsg(`Uploading ${file.name}…`);
+    try {
+      const start = await api.mlogsLoad(caseId, file);
+      let res = { imported: 0 };
+      if (start.job_id && pollJob) {
+        res = await pollJob(start.job_id, (j) => setImportMsg(`${j.phase || "Importing…"} ${j.detail || ""}`));
+      }
+      setImportMsg(`✓ Imported ${res.imported || 0} mlog file(s) from ${file.name}.`);
+      await load();
+    } catch (e) { setErr(String(e.message || e)); setImportMsg(null); }
+    setImporting(false);
+  };
+  const onLoadFolder = async (fileList) => {
+    const files = [...fileList].filter((f) => /(^|\/)mlog\//i.test(f.webkitRelativePath || f.name));
+    if (!files.length) { setErr("The selected folder has no mlog/ directory."); return; }
+    setImporting(true); setErr(null); setImportMsg(`Uploading ${files.length} mlog file(s)…`);
+    try {
+      const r = await api.mlogsLoadFolder(caseId, files, files.map((f) => f.webkitRelativePath || f.name));
+      setImportMsg(`✓ Imported ${r.imported} mlog file(s).`);
+      await load();
+    } catch (e) { setErr(String(e.message || e)); setImportMsg(null); }
+    setImporting(false);
+  };
+  const onClear = async () => {
+    if (!confirm("Remove imported mlog files for this AutoSupport?")) return;
+    try { await api.mlogsClear(caseId); setImportMsg(null); await load(); }
+    catch (e) { setErr(String(e.message || e)); }
+  };
 
   if (!caseId) {
     return (
@@ -67,7 +101,29 @@ export default function MlogsView({ caseId, cases = [], onPickCase }) {
   return (
     <div>
       <h2 className="content-title">Mlogs — {activeCase ? (activeCase.node || activeCase.case_number || caseId) : caseId}</h2>
-      <p className="content-subtitle">Daemon logs classified by family. Expand a family to see its files, then click a file to read it in a human-friendly view.</p>
+      <p className="content-subtitle">Load the <span className="mono">mroot/etc/log/mlog</span> files from a SEPARATE log bundle for this node, then read them classified by family.</p>
+
+      <div className="card" style={{ marginBottom: 10 }}>
+        <b>Load mlog bundle</b>
+        <div className="info-text" style={{ fontSize: 12, margin: "4px 0 8px" }}>
+          Upload a node log bundle (<span className="mono">.tgz</span> / <span className="mono">.zip</span> / <span className="mono">.7z</span> containing <span className="mono">mroot/etc/log/mlog/</span>) or pick that folder. Only the mlog subtree is imported.
+        </div>
+        <div className="toolbar" style={{ flexWrap: "wrap" }}>
+          <label className="btn primary">
+            {importing ? "Working…" : "Upload mlog bundle"}
+            <input type="file" hidden accept=".tgz,.tar.gz,.tar,.7z,.zip,.tbz,.tbz2,.tar.bz2,.txz,.tar.xz"
+              disabled={importing}
+              onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) onLoadArchive(f); }} />
+          </label>
+          <label className="btn">
+            Pick mlog folder
+            <input type="file" hidden webkitdirectory="" directory="" disabled={importing}
+              onChange={(e) => { const fs = e.target.files; e.target.value = ""; if (fs && fs.length) onLoadFolder(fs); }} />
+          </label>
+          {data && data.family_count > 0 && <button className="btn" onClick={onClear} disabled={importing}>Clear imported mlogs</button>}
+        </div>
+        {importMsg && <div className="info-text" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>}
+      </div>
 
       <div className="toolbar" style={{ marginBottom: 10 }}>
         <button className="btn primary" onClick={load} disabled={loading}>{loading ? "Analyzing…" : "↻ Re-analyze"}</button>
@@ -83,7 +139,7 @@ export default function MlogsView({ caseId, cases = [], onPickCase }) {
 
       {data && !loading && (
         data.family_count === 0
-          ? <div className="empty-state">No daemon/mlog logs found in this AutoSupport.</div>
+          ? <div className="empty-state">No mlog files loaded yet. Upload a log bundle (with <span className="mono">mroot/etc/log/mlog/</span>) above.</div>
           : (
             <>
               <div className="card" style={{ marginBottom: 10 }}>

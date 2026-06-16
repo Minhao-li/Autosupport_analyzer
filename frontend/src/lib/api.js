@@ -72,6 +72,16 @@ export const api = {
   mlogsAnalyze: (id, maxFiles) => req("GET", `/api/cases/${id}/mlogs/analyze${qs({ max_files: maxFiles })}`),
   mlogFamilyAnalyze: (id, family, maxFiles) => req("GET", `/api/cases/${id}/mlogs/family/analyze${qs({ family, max_files: maxFiles })}`),
   mlogFile: (id, path, maxRows) => req("GET", `/api/cases/${id}/mlogs/file${qs({ path, max_rows: maxRows })}`),
+  mlogsLoad: (id, file) => {
+    const fd = new FormData(); fd.append("file", file);
+    return req("POST", `/api/cases/${id}/mlogs/load`, fd, true);
+  },
+  mlogsLoadFolder: (id, files, paths) => {
+    const fd = new FormData();
+    files.forEach((f, i) => { fd.append("files", f); fd.append("paths", (paths && paths[i]) || f.webkitRelativePath || f.name); });
+    return req("POST", `/api/cases/${id}/mlogs/load_folder`, fd, true);
+  },
+  mlogsClear: (id) => req("DELETE", `/api/cases/${id}/mlogs`),
   componentParse: (id, comp, files) => req("POST", `/api/cases/${id}/components/${comp}/parse`, { files }),
   componentEvents: (id, comp, params) => req("GET", `/api/cases/${id}/components/${comp}/events${qs(params)}`),
   componentGrep: (id, comp, body) => req("POST", `/api/cases/${id}/components/${comp}/grep`, body),

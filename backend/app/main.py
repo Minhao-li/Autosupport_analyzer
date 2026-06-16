@@ -709,6 +709,90 @@ def api_mlogs_file(case_id: str, path: str, max_rows: int = 5000):
     return mlog.parse_mlog_file(full, max_rows=max_rows)
 
 
+def _mlog_import_dir(case_id: str) -> str:
+    root = _require_case_root(case_id)
+    d = os.path.join(root, "_mlog_import")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+@app.post("/api/cases/{case_id}/mlogs/load")
+def api_mlogs_load(case_id: str, file: UploadFile = File(...)):
+    """Load mlog files for this AutoSupport from a SEPARATE log bundle (a
+    .tgz/.zip/.7z that contains ``mroot/etc/log/mlog/``). Only the mlog subtree
+    is imported; the rest of the bundle is ignored. Runs as a background job."""
+    dest = _mlog_import_dir(case_id)
+    fname = os.path.basename(file.filename or "mlog_bundle")
+    stage = os.path.join(str(CASES_DIR), "_mlogstage_" + cases.new_case_id())
+    os.makedirs(stage, exist_ok=True)
+    tmp = os.path.join(stage, fname)
+    with open(tmp, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    jid = jobs.new_job(label=f"mlog {fname}")
+
+    def work():
+        try:
+            jobs.update(jid, phase="Importing mlog files…", detail=fname, done=0, total=0)
+            n = mlog.extract_mlog_members(
+                tmp, dest, on_progress=lambda c: jobs.update(jid, detail=f"{c} mlog file(s)"))
+            if n < 0:
+                # .7z or unknown: full-extract then copy the mlog subtree.
+                jobs.update(jid, phase="Extracting bundle…", detail=fname)
+                ex = os.path.join(stage, "_x")
+                os.makedirs(ex, exist_ok=True)
+                cases.extract_archive(tmp, ex)
+                cases.extract_all_nested(ex)
+                jobs.update(jid, phase="Importing mlog files…", detail="")
+                n = mlog.import_mlog_tree(ex, dest)
+            shutil.rmtree(stage, ignore_errors=True)
+            if n == 0:
+                jobs.finish(jid, error="No mlog files found in the bundle (no mroot/etc/log/mlog).")
+                return
+            jobs.finish(jid, result={"imported": n})
+        except Exception as e:
+            shutil.rmtree(stage, ignore_errors=True)
+            jobs.finish(jid, error=str(e))
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": jid}
+
+
+@app.post("/api/cases/{case_id}/mlogs/load_folder")
+def api_mlogs_load_folder(case_id: str, paths: list[str] = Form(...),
+                          files: list[UploadFile] = File(...)):
+    """Load mlog files from a dropped folder (only files under an mlog/ dir are
+    kept)."""
+    dest = _mlog_import_dir(case_id)
+    imported = 0
+    for up, rel in zip(files, paths):
+        if not mlog.is_mlog_file(rel or up.filename or ""):
+            continue
+        safe = mlog._safe_rel(rel or up.filename or "")
+        if not safe:
+            continue
+        out = os.path.join(dest, safe.replace("/", os.sep))
+        if not os.path.abspath(out).startswith(os.path.abspath(dest)):
+            continue
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, "wb") as f:
+            shutil.copyfileobj(up.file, f)
+        imported += 1
+    if imported == 0:
+        raise HTTPException(status_code=400, detail="No mlog files in the dropped folder (need an mlog/ directory).")
+    return {"ok": True, "imported": imported}
+
+
+@app.delete("/api/cases/{case_id}/mlogs")
+def api_mlogs_clear(case_id: str):
+    """Remove previously-imported mlog files for this case."""
+    root = _require_case_root(case_id)
+    d = os.path.join(root, "_mlog_import")
+    if os.path.isdir(d):
+        shutil.rmtree(d, ignore_errors=True)
+    return {"ok": True}
+
+
 @app.get("/api/cases/{case_id}/component_index")
 def api_component_index(case_id: str):
     """Map each component to the (lowercased) base names of its files, so the UI

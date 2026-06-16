@@ -386,7 +386,7 @@ export default function App() {
           {view.kind === "asup" && <AsupView caseId={caseId} cases={cases} isAdmin={account.is_admin} onPickCase={setCaseId} key={caseId || "none"} />}
           {view.kind === "asupdl" && <AsupDownloadView pollJob={pollJob}
             onLoaded={(created) => { refreshCases(); if (created && created.length) { setCaseId(created[created.length - 1].id); setView({ kind: created.length > 1 ? "clusters" : "home" }); } }} />}
-          {view.kind === "mlogs" && <MlogsView caseId={caseId} cases={cases} onPickCase={setCaseId} key={caseId || "none"} />}
+          {view.kind === "mlogs" && <MlogsView caseId={caseId} cases={cases} onPickCase={setCaseId} pollJob={pollJob} key={caseId || "none"} />}
           {view.kind === "autosupport" && (caseId ? <AutoSupportView caseId={caseId} cases={cases} key={caseId} /> : <NeedCase />)}
           {view.kind === "admin" && account.is_admin && <AdminView plugins={plugins} />}
         </main>
