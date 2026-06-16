@@ -698,6 +698,17 @@ def api_mlogs_family_analyze(case_id: str, family: str, max_files: int = 40):
     return mlog.analyze_family(root, family, max_files=max_files)
 
 
+@app.get("/api/cases/{case_id}/mlogs/file")
+def api_mlogs_file(case_id: str, path: str, max_rows: int = 5000):
+    """Parse one mlog/daemon log file into human-friendly rows
+    (time / severity / module / message)."""
+    root = _require_case_root(case_id)
+    full = _safe_join(root, path)
+    if not os.path.isfile(full):
+        raise HTTPException(status_code=404, detail="File not found")
+    return mlog.parse_mlog_file(full, max_rows=max_rows)
+
+
 @app.get("/api/cases/{case_id}/component_index")
 def api_component_index(case_id: str):
     """Map each component to the (lowercased) base names of its files, so the UI

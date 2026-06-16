@@ -71,6 +71,7 @@ export const api = {
   mlogs: (id) => req("GET", `/api/cases/${id}/mlogs`),
   mlogsAnalyze: (id, maxFiles) => req("GET", `/api/cases/${id}/mlogs/analyze${qs({ max_files: maxFiles })}`),
   mlogFamilyAnalyze: (id, family, maxFiles) => req("GET", `/api/cases/${id}/mlogs/family/analyze${qs({ family, max_files: maxFiles })}`),
+  mlogFile: (id, path, maxRows) => req("GET", `/api/cases/${id}/mlogs/file${qs({ path, max_rows: maxRows })}`),
   componentParse: (id, comp, files) => req("POST", `/api/cases/${id}/components/${comp}/parse`, { files }),
   componentEvents: (id, comp, params) => req("GET", `/api/cases/${id}/components/${comp}/events${qs(params)}`),
   componentGrep: (id, comp, body) => req("POST", `/api/cases/${id}/components/${comp}/grep`, body),

@@ -25,6 +25,7 @@ import re
 
 from . import parsing
 from .mgwd_log import parse_mgwd_log, looks_like_mgwd
+from .sktrace_log import parse_sktrace_log, looks_like_sktrace
 
 # A path is "mlog" when any directory segment is exactly ``mlog`` (full log
 # bundles: mroot/etc/log/mlog/...), OR — for AutoSupports, which flatten the
@@ -258,6 +259,7 @@ def analyze_all(root: str, max_files_per_family: int = 40) -> dict:
                            max_files=max_files_per_family)
         a["size"] = f["size"]
         a["file_count"] = f["count"]
+        a["files"] = f["files"]           # [{path, size}] for the file browser
         results.append(a)
     results.sort(key=lambda r: (-r["problems"], r["family"].lower()))
     totals = {s: sum(r["counts"][s] for r in results) for s in _SEV_ORDER}
@@ -268,3 +270,65 @@ def analyze_all(root: str, max_files_per_family: int = 40) -> dict:
         "total_lines": sum(r["lines"] for r in results),
         "total_problems": sum(r["problems"] for r in results),
     }
+
+
+def parse_mlog_file(full: str, max_rows: int = 5000, max_bytes: int = 24_000_000) -> dict:
+    """Parse a single mlog/daemon log file into human-friendly rows:
+    ``{n, time, severity, module, message}`` — choosing the right format parser
+    (mgwd daemon envelope, sktrace, or a generic line scan)."""
+    info = parsing.read_file_content(full, max_bytes=max_bytes)
+    if info.get("binary") or "content" not in info:
+        return {"ok": False, "error": "Not readable as text", "rows": [], "total": 0,
+                "format": "binary", "truncated": bool(info.get("truncated"))}
+    text = info["content"]
+
+    rows: list[dict] = []
+    fmt = "generic"
+
+    if looks_like_mgwd(text):
+        fmt = "mgwd"
+        parsed = parse_mgwd_log(full, max_records=max_rows)
+        for i, ev in enumerate(parsed.get("events", []), 1):
+            rows.append({
+                "n": i,
+                "time": ev.get("time"),
+                "severity": ev.get("severity") or "INFO",
+                "module": ev.get("subsystem") or ev.get("module") or "",
+                "message": (ev.get("detail") or ev.get("message") or "")[:2000],
+            })
+        total = parsed.get("total", len(rows))
+        truncated = bool(info.get("truncated") or parsed.get("truncated"))
+    elif looks_like_sktrace(text):
+        fmt = "sktrace"
+        parsed = parse_sktrace_log(full, max_records=max_rows)
+        for i, ev in enumerate(parsed.get("events", []), 1):
+            rows.append({
+                "n": i,
+                "time": ev.get("time") or ev.get("ts"),
+                "severity": ev.get("severity") or "INFO",
+                "module": ev.get("tag") or ev.get("func") or "",
+                "message": (ev.get("message") or ev.get("detail") or "")[:2000],
+            })
+        total = parsed.get("total", len(rows))
+        truncated = bool(info.get("truncated") or parsed.get("truncated"))
+    else:
+        iso = re.compile(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*)")
+        total = 0
+        for raw in text.splitlines():
+            if not raw.strip():
+                continue
+            total += 1
+            if len(rows) >= max_rows:
+                continue
+            m = iso.match(raw)
+            rows.append({
+                "n": total,
+                "time": (m.group(1) if m else None),
+                "severity": _keyword_sev(raw),
+                "module": "",
+                "message": raw.strip()[:2000],
+            })
+        truncated = bool(info.get("truncated") or total > len(rows))
+
+    return {"ok": True, "format": fmt, "rows": rows, "total": total,
+            "row_count": len(rows), "truncated": truncated}

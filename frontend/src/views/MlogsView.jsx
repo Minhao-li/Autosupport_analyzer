@@ -1,61 +1,55 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.js";
+import { fmtBytes } from "../lib/helpers.jsx";
 
-// Mlogs page: surfaces the mroot/etc/log/mlog daemon logs that arrive with a
-// loaded AutoSupport, classifies them by log family (rotation-independent base
-// name) and shows a severity/time analysis per family.
+// Mlogs page: surfaces the daemon logs (mroot/etc/log/mlog, or the flattened
+// daemon logs inside an AutoSupport) that arrive with a loaded AutoSupport,
+// classifies them by log family, lists the organized files (clickable) and
+// shows a humanized per-file viewer with severity colouring.
 const SEVS = ["CRIT", "ERR", "WARN", "NOTICE", "INFO", "DEBUG"];
 
 function SevBar({ counts }) {
-  const total = SEVS.reduce((a, s) => a + (counts[s] || 0), 0) || 1;
   return (
     <div className="sev-bar" style={{ flexWrap: "nowrap", minWidth: 160 }}>
       {SEVS.map((s) => counts[s] ? (
         <span key={s} className={`sev-${s}`} style={{ fontSize: 11, fontWeight: 700 }}
           title={`${s}: ${counts[s]}`}>{s[0]}{counts[s]}</span>
       ) : null)}
-      {total === 1 && !SEVS.some((s) => counts[s]) ? <span className="muted" style={{ fontSize: 11 }}>—</span> : null}
+      {!SEVS.some((s) => counts[s]) ? <span className="muted" style={{ fontSize: 11 }}>—</span> : null}
     </div>
   );
 }
 
 export default function MlogsView({ caseId, cases = [], onPickCase }) {
-  const [data, setData] = useState(null);     // analyze_all result
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
-  const [detail, setDetail] = useState({});   // family -> full analysis (samples)
+  const [viewer, setViewer] = useState(null); // { path }
 
   const activeCase = useMemo(() => cases.find((c) => c.id === caseId), [cases, caseId]);
 
   const load = async () => {
     if (!caseId) return;
-    setLoading(true); setErr(null); setData(null); setExpanded(new Set()); setDetail({});
+    setLoading(true); setErr(null); setData(null); setExpanded(new Set());
     try {
       const r = await api.mlogsAnalyze(caseId);
       setData(r);
+      setExpanded(new Set(r.families.filter((f) => f.problems > 0).slice(0, 3).map((f) => f.family)));
     } catch (e) { setErr(String(e.message || e)); }
     setLoading(false);
   };
   useEffect(() => { if (caseId) load(); /* eslint-disable-next-line */ }, [caseId]);
 
-  const toggle = async (fam) => {
-    setExpanded((s) => { const n = new Set(s); n.has(fam) ? n.delete(fam) : n.add(fam); return n; });
-    if (!detail[fam]) {
-      try {
-        const r = await api.mlogFamilyAnalyze(caseId, fam);
-        setDetail((d) => ({ ...d, [fam]: r }));
-      } catch (e) { /* ignore */ }
-    }
-  };
+  const toggle = (fam) => setExpanded((s) => { const n = new Set(s); n.has(fam) ? n.delete(fam) : n.add(fam); return n; });
 
   if (!caseId) {
     return (
       <div>
         <h2 className="content-title">Mlogs</h2>
-        <p className="content-subtitle">Daemon logs from <span className="mono">mroot/etc/log/mlog</span>, classified by log family and analyzed.</p>
+        <p className="content-subtitle">Daemon logs (<span className="mono">mgwd</span>, <span className="mono">messages</span>, <span className="mono">secd</span>, <span className="mono">sktrace</span>, …) from a loaded AutoSupport, classified by log family.</p>
         <div className="card">
-          <b>Pick an AutoSupport to analyze its mlogs</b>
+          <b>Pick an AutoSupport</b>
           {cases.length === 0 ? <div className="empty-state">No AutoSupports loaded.</div> : (
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
               {cases.map((c) => (
@@ -73,7 +67,7 @@ export default function MlogsView({ caseId, cases = [], onPickCase }) {
   return (
     <div>
       <h2 className="content-title">Mlogs — {activeCase ? (activeCase.node || activeCase.case_number || caseId) : caseId}</h2>
-      <p className="content-subtitle">Daemon logs from <span className="mono">mroot/etc/log/mlog</span>, classified by log family and analyzed by severity.</p>
+      <p className="content-subtitle">Daemon logs classified by family. Expand a family to see its files, then click a file to read it in a human-friendly view.</p>
 
       <div className="toolbar" style={{ marginBottom: 10 }}>
         <button className="btn primary" onClick={load} disabled={loading}>{loading ? "Analyzing…" : "↻ Re-analyze"}</button>
@@ -89,12 +83,11 @@ export default function MlogsView({ caseId, cases = [], onPickCase }) {
 
       {data && !loading && (
         data.family_count === 0
-          ? <div className="empty-state">No mlog files found in this AutoSupport (no <span className="mono">mroot/etc/log/mlog</span> directory).</div>
+          ? <div className="empty-state">No daemon/mlog logs found in this AutoSupport.</div>
           : (
             <>
-              {/* overall severity totals */}
               <div className="card" style={{ marginBottom: 10 }}>
-                <b>Overall</b>
+                <b>Overall severity</b>
                 <div style={{ display: "flex", gap: 14, marginTop: 6, flexWrap: "wrap" }}>
                   {SEVS.map((s) => (
                     <span key={s} className={`sev-${s}`} style={{ fontWeight: 700 }}>
@@ -104,71 +97,127 @@ export default function MlogsView({ caseId, cases = [], onPickCase }) {
                 </div>
               </div>
 
-              <table className="file-table" style={{ width: "100%" }}>
-                <thead>
-                  <tr>
-                    <th style={{ width: 24 }}></th>
-                    <th>Log family</th>
-                    <th>Files</th>
-                    <th>Lines</th>
-                    <th>Severity</th>
-                    <th>Time range</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.families.map((f) => (
-                    <React.Fragment key={f.family}>
-                      <tr style={{ cursor: "pointer" }} onClick={() => toggle(f.family)}>
-                        <td>{expanded.has(f.family) ? "▾" : "▸"}</td>
-                        <td className="mono"><b>{f.family}</b>{f.problems > 0 && <span className="sev-ERR" style={{ marginLeft: 6, fontSize: 11 }}>● {f.problems}</span>}</td>
-                        <td>{f.file_count}</td>
-                        <td>{f.lines.toLocaleString()}</td>
-                        <td><SevBar counts={f.counts} /></td>
-                        <td style={{ fontSize: 11 }}>{f.first_ts ? `${f.first_ts} → ${f.last_ts}` : "—"}</td>
-                      </tr>
-                      {expanded.has(f.family) && (
-                        <tr>
-                          <td></td>
-                          <td colSpan={5}>
-                            <FamilyDetail fam={f} det={detail[f.family]} />
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
+              <div className="case-tree">
+                {data.families.map((f) => (
+                  <div key={f.family} className="card" style={{ padding: "8px 12px", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => toggle(f.family)}>
+                      <span className={`tree-chev ${expanded.has(f.family) ? "open" : ""}`}>▶</span>
+                      <b className="mono" style={{ minWidth: 150 }}>{f.family}</b>
+                      {f.problems > 0 && <span className="sev-ERR" style={{ fontSize: 12, fontWeight: 700 }}>● {f.problems} problems</span>}
+                      <span className="muted" style={{ fontSize: 12 }}>{f.file_count} file(s) · {f.lines.toLocaleString()} lines · {fmtBytes(f.size)}</span>
+                      <div style={{ flex: 1 }} />
+                      <SevBar counts={f.counts} />
+                    </div>
+                    {expanded.has(f.family) && (
+                      <div style={{ marginTop: 8, paddingLeft: 26 }}>
+                        {f.first_ts && <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>🕑 {f.first_ts} → {f.last_ts}</div>}
+                        <table className="file-table" style={{ width: "100%" }}>
+                          <thead><tr><th>File</th><th style={{ width: 110 }}>Size</th><th style={{ width: 60 }}></th></tr></thead>
+                          <tbody>
+                            {f.files.map((file) => (
+                              <tr key={file.path} style={{ cursor: "pointer" }}
+                                onClick={() => setViewer({ path: file.path })}>
+                                <td className="mono" style={{ fontSize: 12 }}>📄 {file.path.split("/").pop()}
+                                  <span className="muted" style={{ marginLeft: 8, fontSize: 10 }}>{file.path}</span></td>
+                                <td>{fmtBytes(file.size)}</td>
+                                <td><button className="icon-btn" onClick={(e) => { e.stopPropagation(); setViewer({ path: file.path }); }}>Open</button></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </>
           )
       )}
+
+      {viewer && <MlogFileViewer caseId={caseId} path={viewer.path} onClose={() => setViewer(null)} />}
     </div>
   );
 }
 
-function FamilyDetail({ fam, det }) {
-  const d = det || fam;
-  const samples = (d && d.samples) || [];
+// Humanized single-file log viewer: time | severity (colored) | module | message,
+// with a severity filter and a text search.
+function MlogFileViewer({ caseId, path, onClose }) {
+  const [res, setRes] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [offSev, setOffSev] = useState(new Set());
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    setLoading(true); setErr(null); setRes(null);
+    api.mlogFile(caseId, path, 8000)
+      .then(setRes).catch((e) => setErr(String(e.message || e)))
+      .finally(() => setLoading(false));
+  }, [caseId, path]);
+
+  const rows = res && res.rows ? res.rows : [];
+  const counts = useMemo(() => {
+    const c = {}; for (const r of rows) c[r.severity] = (c[r.severity] || 0) + 1; return c;
+  }, [rows]);
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return rows.filter((r) => !offSev.has(r.severity) &&
+      (!ql || (r.message || "").toLowerCase().includes(ql) || (r.module || "").toLowerCase().includes(ql)));
+  }, [rows, offSev, q]);
+
+  const toggleSev = (s) => setOffSev((o) => { const n = new Set(o); n.has(s) ? n.delete(s) : n.add(s); return n; });
+  const name = path.split("/").pop();
+
   return (
-    <div style={{ padding: "6px 0 10px" }}>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-        {fam.file_count} rotation file(s){d && d.truncated ? " · analysis truncated (very large)" : ""}.
-        {samples.length ? ` Showing ${samples.length} notable line(s):` : " No CRIT/ERR/WARN lines."}
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal priority" onClick={(e) => e.stopPropagation()} style={{ width: "min(1100px, 95vw)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+        <div className="toolbar">
+          <b style={{ flex: 1 }} className="mono">📄 {name}</b>
+          {res && <span className="muted" style={{ fontSize: 12 }}>{res.format} · {res.row_count.toLocaleString()} / {res.total.toLocaleString()} lines{res.truncated ? " (truncated)" : ""}</span>}
+          <button className="icon-btn" onClick={onClose}>Close</button>
+        </div>
+        <div className="toolbar" style={{ flexWrap: "wrap" }}>
+          {SEVS.map((s) => (
+            <span key={s} className={`sev-toggle sev-${s} ${offSev.has(s) ? "off" : ""}`}
+              style={{ fontSize: 12, fontWeight: 700 }} onClick={() => toggleSev(s)}>
+              {s} {counts[s] ? `(${counts[s]})` : ""}
+            </span>
+          ))}
+          <input placeholder="filter text…" value={q} onChange={(e) => setQ(e.target.value)}
+            style={{ flex: 1, minWidth: 160 }} />
+        </div>
+        <div style={{ overflow: "auto", flex: 1 }}>
+          {loading && <div className="info-text">Loading…</div>}
+          {err && <div className="error-text">{err}</div>}
+          {res && (
+            res.format === "binary"
+              ? <div className="empty-state">Not a readable text log.</div>
+              : (
+                <table className="file-table mlog-table" style={{ width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 160 }}>Time</th>
+                      <th style={{ width: 70 }}>Severity</th>
+                      <th style={{ width: 160 }}>Module</th>
+                      <th>Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((r, i) => (
+                      <tr key={i}>
+                        <td style={{ fontSize: 11, whiteSpace: "nowrap" }} className="mono">{r.time || "—"}</td>
+                        <td className={`sev-${r.severity}`} style={{ fontWeight: 700, fontSize: 11 }}>{r.severity}</td>
+                        <td className="mono" style={{ fontSize: 11 }}>{r.module || "—"}</td>
+                        <td style={{ fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{r.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+          )}
+          {res && !loading && filtered.length === 0 && <div className="empty-state">No lines match the current filter.</div>}
+        </div>
       </div>
-      {samples.length > 0 && (
-        <table className="file-table" style={{ width: "100%" }}>
-          <thead><tr><th>Sev</th><th>Time</th><th>Message</th><th>File</th></tr></thead>
-          <tbody>
-            {samples.map((s, i) => (
-              <tr key={i}>
-                <td className={`sev-${s.severity}`} style={{ fontWeight: 700 }}>{s.severity}</td>
-                <td style={{ fontSize: 11, whiteSpace: "nowrap" }}>{s.time || "—"}</td>
-                <td style={{ fontSize: 12 }}>{s.message}</td>
-                <td className="mono" style={{ fontSize: 10 }}>{(s.file || "").split("/").pop()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </div>
   );
 }
