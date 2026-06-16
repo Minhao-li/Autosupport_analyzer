@@ -35,18 +35,23 @@ export default function AsupView({ caseId, cases = [], isAdmin, onPickCase }) {
     if (caseId) api.autosupportFiles(caseId).then((r) => setFiles(r.files)).catch(() => setFiles([]));
   }, [caseId]);
 
+  const activeCaseLabel = useMemo(() => {
+    const c = cases.find((x) => x.id === caseId);
+    return c ? (c.node || c.case_number || c.id) : null;
+  }, [cases, caseId]);
+
   // derive autosupport collection directories (relative dir path -> {label, count})
   const collections = useMemo(() => {
     const map = new Map();
     for (const f of files || []) {
-      const m = f.path.match(/^(.*autosupport\/[^/]+)/i);
-      if (!m) continue;
-      const dir = m[1];
-      if (!map.has(dir)) map.set(dir, { dir, label: dir.split("/").pop(), count: 0 });
+      const dir = f.collection || (f.path.match(/^(.*autosupport\/[^/]+)/i) || [])[1];
+      if (!dir) continue;
+      const label = dir === "." ? (activeCaseLabel || "AutoSupport") : dir.split("/").pop();
+      if (!map.has(dir)) map.set(dir, { dir, label, count: 0 });
       map.get(dir).count++;
     }
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
-  }, [files]);
+  }, [files, activeCaseLabel]);
 
   const toggle = (d) => setSel((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n; });
   const allSelected = collections.length > 0 && collections.every((c) => sel.has(c.dir));
@@ -99,8 +104,8 @@ export default function AsupView({ caseId, cases = [], isAdmin, onPickCase }) {
     const r = await api.autosupportFiles(id).catch(() => ({ files: [] }));
     const map = new Map();
     for (const f of r.files || []) {
-      const m = f.path.match(/^(.*autosupport\/[^/]+)/i);
-      const dir = m ? m[1] : f.path.replace(/\/[^/]*$/, "");
+      const dir = f.collection || (f.path.match(/^(.*autosupport\/[^/]+)/i) || [])[1];
+      if (!dir) continue;
       if (!map.has(dir)) map.set(dir, dir);
     }
     const dirs = [...map.values()];

@@ -632,23 +632,43 @@ def api_component_files(case_id: str, component: str):
 
 @app.get("/api/cases/{case_id}/autosupport_files")
 def api_autosupport_files(case_id: str):
-    """All files physically located under any .../autosupport/ directory,
-    regardless of component classification (the AutoSupport directory browser)."""
+    """All files belonging to an AutoSupport collection. A collection is either a
+    literal ``.../autosupport/<name>/`` directory, or any directory that directly
+    contains an ASUP header (``X-HEADER-DATA.TXT``) — the latter covers ASUPs
+    downloaded/loaded with their files at the case root (collection root ``.``)."""
     root = _require_case_root(case_id)
-    rx = re.compile(r"(^|/)autosupport/", re.IGNORECASE)
+    files_all = list(parsing.walk_files(root))
+    # Collection roots inferred from the ASUP header file's location.
+    header_roots = set()
+    for rel, _full in files_all:
+        if rel.rsplit("/", 1)[-1].lower().startswith("x-header-data"):
+            header_roots.add(rel[:rel.rfind("/")] if "/" in rel else "")
+
+    def collection_of(rel):
+        m = re.match(r"^(.*?autosupport/[^/]+)", rel, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        for hr in header_roots:
+            if hr == "" or rel == hr or rel.startswith(hr + "/"):
+                return hr or "."
+        return None
+
     out = []
-    for rel, full in parsing.walk_files(root):
-        if rx.search(rel):
-            try:
-                size = os.path.getsize(full)
-            except OSError:
-                size = 0
-            out.append({
-                "path": rel,
-                "size": size,
-                "parseable": parsing.is_text_file(full),
-                "component": plugins.classify_path(rel),
-            })
+    for rel, full in files_all:
+        coll = collection_of(rel)
+        if coll is None:
+            continue
+        try:
+            size = os.path.getsize(full)
+        except OSError:
+            size = 0
+        out.append({
+            "path": rel,
+            "size": size,
+            "parseable": parsing.is_text_file(full),
+            "component": plugins.classify_path(rel),
+            "collection": coll,
+        })
     return {"files": out, "count": len(out)}
 
 
@@ -1617,7 +1637,7 @@ def asup_extension(request: Request):
 def _safe_archive_base(name: str) -> str:
     """Sanitize a base name; ASUP/AIQ requires the first char to be a letter,
     so prepend 'A' when it starts with a digit."""
-    base = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "").strip()) or "asup"
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "").strip()).strip("._-") or "asup"
     if base[0].isdigit():
         base = "A" + base
     return base
@@ -1644,7 +1664,13 @@ def asup_package(case_id: str, body: PackageIn):
     default = body.name
     if not default:
         first = body.paths[0].rstrip("/").split("/")[-1]
-        default = first if len(body.paths) == 1 else f"{first}_and_{len(body.paths) - 1}_more"
+        if first in ("", ".", ".."):
+            # Root collection (a downloaded/root ASUP): name it after the node.
+            row = cases.get_case(case_id)
+            default = ((row["node"] if row else None) or
+                       (row["case_number"] if row else None) or case_id)
+        else:
+            default = first if len(body.paths) == 1 else f"{first}_and_{len(body.paths) - 1}_more"
     base = _safe_archive_base(default)
     name = base + ".7z"
     out = os.path.join(_pkg_dir(case_id), name)
