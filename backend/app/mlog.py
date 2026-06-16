@@ -26,16 +26,38 @@ import re
 from . import parsing
 from .mgwd_log import parse_mgwd_log, looks_like_mgwd
 
-# A path is "mlog" when any directory segment is exactly ``mlog``.
+# A path is "mlog" when any directory segment is exactly ``mlog`` (full log
+# bundles: mroot/etc/log/mlog/...), OR — for AutoSupports, which flatten the
+# daemon logs to the collection root — the file name is a known daemon log or
+# carries the ``-mlog``/``mlog`` marker (e.g. ``mgwd.gz``, ``messages.log.gz``,
+# ``audit-mlog.txt.gz``, ``sysmgr-mlog.txt.gz``).
 _MLOG_DIR_RE = re.compile(r"(?:^|/)mlog/", re.IGNORECASE)
 
-# Rotation suffixes to strip when reducing a file name to its log family.
+# Known ONTAP daemon / mlog log families (rotation- and extension-independent).
+KNOWN_DAEMONS = {
+    "mgwd", "messages", "secd", "vifmgr", "notifyd", "spmd", "vldb", "bcomd",
+    "cfmd", "crs", "sysmgr", "servprocd", "ndmpd", "licensed", "fpolicy", "php",
+    "php-fpm.access", "php-fpm.error", "sktrace", "audit", "auditlog", "debug",
+    "hashd", "kmip2_client", "vserverdr", "ypbind", "perfstatd", "cm-daemon",
+    "qpidd", "qdrouterd", "dotsql", "smnlog", "snapmirror", "snapmirror_audit",
+    "snapmirror_error", "snapmirror-audit-log", "snapmirror-error-log",
+    "apache_access", "apache_error", "csm-trace-buffer", "ems-log-file",
+    "ems", "leak-data", "netsetup", "sp-debug", "sp-debug-old", "sp-mgmt",
+    "coresegd", "named", "bgpd", "corefs", "httpd", "command-history",
+    "mhd_stat", "spdebug",
+}
+
+# Rotation / packaging suffixes to strip when reducing a file name to its log
+# family. Order matters; applied repeatedly until stable.
 _ROTATION_RES = (
-    re.compile(r"\.gz$", re.IGNORECASE),
+    re.compile(r"\.gz$", re.IGNORECASE),          # mgwd.gz
+    re.compile(r"\.txt$", re.IGNORECASE),         # audit-mlog.txt
     re.compile(r"\.log\.\d+$", re.IGNORECASE),   # name.log.0000000113
     re.compile(r"\.log$", re.IGNORECASE),         # name.log
     re.compile(r"\.\d+$"),                          # name.4  /  name.0000000113
 )
+# Trailing daemon-mlog markers (after extension stripping): audit-mlog -> audit.
+_MLOG_SUFFIX_RE = re.compile(r"[-_]mlog$", re.IGNORECASE)
 
 # Map per-message level tokens to the app-wide severity buckets.
 _SEV_ORDER = ["CRIT", "ERR", "WARN", "NOTICE", "INFO", "DEBUG"]
@@ -48,12 +70,8 @@ _KEYWORD_SEV = [
 ]
 
 
-def is_mlog_path(rel: str) -> bool:
-    return bool(_MLOG_DIR_RE.search(rel or ""))
-
-
 def family_of(name: str) -> str:
-    """Reduce a file name to its rotation-independent log family."""
+    """Reduce a file name to its rotation/packaging-independent log family."""
     base = name
     changed = True
     while changed:
@@ -64,13 +82,36 @@ def family_of(name: str) -> str:
                 base = new
                 changed = True
                 break
+    # Collapse the daemon-mlog marker: audit-mlog -> audit, sysmgr-mlog -> sysmgr.
+    stripped = _MLOG_SUFFIX_RE.sub("", base)
+    if stripped:
+        base = stripped
     return base or name
 
 
+def is_mlog_file(rel: str) -> bool:
+    """True for a daemon/mlog log file — either physically under an ``mlog``
+    directory, or an AutoSupport-flattened daemon log at the collection root."""
+    if _MLOG_DIR_RE.search(rel or ""):
+        return True
+    name = (rel or "").rsplit("/", 1)[-1]
+    if not name or name.startswith("."):
+        return False
+    low = name.lower()
+    if "mlog" in low:
+        return True
+    return family_of(name).lower() in KNOWN_DAEMONS
+
+
+# Back-compat alias.
+def is_mlog_path(rel: str) -> bool:
+    return is_mlog_file(rel)
+
+
 def find_mlog_files(root: str):
-    """Yield ``(rel, full, size)`` for every file under an ``mlog`` directory."""
+    """Yield ``(rel, full, size)`` for every daemon/mlog log file in a case."""
     for rel, full in parsing.walk_files(root):
-        if not is_mlog_path(rel):
+        if not is_mlog_file(rel):
             continue
         try:
             size = os.path.getsize(full)
