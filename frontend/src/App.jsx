@@ -168,25 +168,47 @@ export default function App() {
 
   const onDelete = async (id) => {
     if (!confirm("Delete this case?")) return;
-    try { await api.deleteCase(id); if (caseId === id) setCaseId(null); refreshCases(); }
+    const c = cases.find((x) => x.id === id);
+    const label = c ? (c.node || c.case_number || id) : id;
+    setProgress({ title: "Deleting", phase: "Deleting AutoSupport…", detail: label, label, done: 0, total: 1 });
+    try {
+      await api.deleteCase(id);
+      if (caseId === id) setCaseId(null);
+      setProgress({ title: "Deleting", phase: "Done", detail: label, label, done: 1, total: 1 });
+      await refreshCases();
+    }
     catch (e) { setErr(String(e.message || e)); }
+    setProgress(null);
   };
 
   // Delete every AutoSupport beneath a tree group (a case #, cluster or node).
   const onDeleteGroup = async (ids, label) => {
     if (!ids || !ids.length) return;
     if (!confirm(`Delete ${ids.length} AutoSupport(s) under "${label}"? This cannot be undone.`)) return;
+    const total = ids.length;
     try {
-      for (const id of ids) { await api.deleteCase(id); if (caseId === id) setCaseId(null); }
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        const c = cases.find((x) => x.id === id);
+        const name = c ? (c.node || c.case_number || id) : id;
+        setProgress({ title: "Deleting", phase: `Deleting AutoSupport ${i + 1} of ${total}…`,
+          detail: name, label, done: i, total });
+        await api.deleteCase(id);
+        if (caseId === id) setCaseId(null);
+      }
+      setProgress({ title: "Deleting", phase: "Done", detail: `${total} deleted`, label, done: total, total });
       await refreshCases();
     } catch (e) { setErr(String(e.message || e)); }
+    setProgress(null);
   };
 
   const onDeleteAll = async () => {
     if (!cases.length) return;
     if (!confirm(`Delete ALL ${cases.length} AutoSupport(s)? This cannot be undone.`)) return;
+    setProgress({ title: "Deleting", phase: `Deleting all ${cases.length} AutoSupport(s)…`, detail: "", label: "all", done: 0, total: 0 });
     try { await api.deleteAllCases(); setCaseId(null); await refreshCases(); }
     catch (e) { setErr(String(e.message || e)); }
+    setProgress(null);
   };
 
   const logout = async () => { await api.logout().catch(() => {}); setMe(null); };
@@ -393,12 +415,12 @@ export default function App() {
 
 function NeedCase() { return <div className="empty-state">Load a case first.</div>; }
 
-function LoadProgress({ phase, detail, done, total, label }) {
+function LoadProgress({ phase, detail, done, total, label, title = "Loading" }) {
   const pct = total > 0 ? Math.round((done / total) * 100) : null;
   return (
     <div className="load-overlay">
       <div className="load-card">
-        <div className="load-title"><span className="spin" /> Loading {label ? <span className="muted">· {label}</span> : null}</div>
+        <div className="load-title"><span className="spin" /> {title} {label ? <span className="muted">· {label}</span> : null}</div>
         <div className="load-phase">{phase || "Working…"}</div>
         <div className={`load-bar ${pct === null ? "indet" : ""}`}>
           <div className="load-bar-fill" style={pct === null ? undefined : { width: pct + "%" }} />
