@@ -4,6 +4,24 @@ import { asupTypeClass } from "../lib/helpers.jsx";
 
 const AIQ_URL = "https://aiq.netapp.com/asup-upload";
 
+// Render an AutoSupport title, highlighting the parenthetical category — e.g.
+// "HA Group Notification (MANAGEMENT_LOG) NOTICE" colours the "MANAGEMENT_LOG"
+// part by category using the same strategy as the history ASUP-type chips.
+function renderTitle(subject) {
+  if (!subject) return "—";
+  const m = subject.match(/\(([^)]*)\)/);
+  if (!m) return subject;
+  const before = subject.slice(0, m.index);
+  const after = subject.slice(m.index + m[0].length);
+  return (
+    <>
+      {before}
+      <span className={`chip asup-type ${asupTypeClass(m[1])}`}>{m[1]}</span>
+      {after}
+    </>
+  );
+}
+
 // Download AutoSupports from the ASUP-viewer gateway and load them into the
 // analyzer. Reuses the same ActiveIQ token captured for ASUP upload.
 export default function AsupDownloadView({ pollJob, onLoaded }) {
@@ -173,7 +191,6 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
                     <th style={{ width: 28 }}><input type="checkbox" checked={allSel} onChange={toggleAll} /></th>
                     <th>AutoSupport ID</th>
                     <th>Node</th>
-                    <th>Type</th>
                     <th>Title</th>
                     <th>Generated</th>
                   </tr>
@@ -184,10 +201,7 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
                       <td><input type="checkbox" checked={sel.has(a.asup_id)} onChange={() => toggle(a.asup_id)} /></td>
                       <td className="mono">{a.asup_id}</td>
                       <td>{a.node || "—"}</td>
-                      <td>{a.asup_type
-                        ? <span className={`chip asup-type ${asupTypeClass(`${a.subject || ""} ${a.asup_type}`)}`}>{a.asup_type}</span>
-                        : "—"}</td>
-                      <td>{a.subject || "—"}</td>
+                      <td>{renderTitle(a.subject)}</td>
                       <td>{a.generated_on || "—"}</td>
                     </tr>
                   ))}
