@@ -75,7 +75,7 @@ button{font:inherit;cursor:pointer}
 .case-tree-row.leaf{cursor:pointer}
 .case-tree-row.leaf .case-tree-label{flex:0 1 auto}
 .case-tree-actions{display:inline-flex;gap:4px;align-items:center;opacity:0;transition:opacity .12s}
-.case-tree-row.leaf:hover .case-tree-actions,.case-tree-row.leaf:focus-within .case-tree-actions{opacity:1}
+.case-tree-row:hover .case-tree-actions,.case-tree-row:focus-within .case-tree-actions{opacity:1}
 .case-tree-row.leaf .case-tree-count{margin-left:auto}
 .case-tree-row.leaf .case-tree-label{padding-left:17px}
 .case-tree-row.leaf.active{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
