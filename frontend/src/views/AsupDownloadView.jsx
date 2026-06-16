@@ -20,8 +20,9 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [includeCluster, setIncludeCluster] = useState(true);
   const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState(null); // [{asup_id, generated_on}]
+  const [results, setResults] = useState(null); // [{asup_id, generated_on, node, asup_type}]
   const [sel, setSel] = useState(new Set());
   const [idsText, setIdsText] = useState("");
   const [caseNumber, setCaseNumber] = useState("");
@@ -70,10 +71,11 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
   const runSearch = async () => {
     setSearching(true); setErr(null); setMsg(null); setResults(null); setSel(new Set());
     try {
-      const r = await api.asupDownloadList({ query: query.trim(), date_from: dateFrom || null, date_to: dateTo || null });
+      const r = await api.asupDownloadList({ query: query.trim(), date_from: dateFrom || null, date_to: dateTo || null, include_cluster: includeCluster });
       setResults(r.asups || []);
       setSel(new Set((r.asups || []).map((a) => a.asup_id)));
-      setMsg(`Found ${r.count} AutoSupport(s)${r.total > r.count ? ` (of ${r.total}, filtered by date)` : ""}.`);
+      const nodesTxt = (r.nodes && r.nodes.length) ? ` across ${r.node_count} node(s): ${r.nodes.join(", ")}` : "";
+      setMsg(`Found ${r.count} AutoSupport(s)${nodesTxt}${r.total > r.count ? ` (of ${r.total}, filtered by date)` : ""}.${r.note ? " " + r.note : ""}`);
     } catch (e) { setErr(String(e.message || e)); }
     setSearching(false);
   };
@@ -148,12 +150,15 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
       <div className="card">
         <b>2 · Find AutoSupports</b>
         <div className="info-text" style={{ fontSize: 12, marginTop: 4 }}>
-          Search by system serial number (e.g. <span className="mono">722042000140</span>). AutoSupport ids are time-based; narrow by date range to pick a subset.
+          Search by system serial number (e.g. <span className="mono">722042000140</span>). With <b>include all cluster nodes</b> on, the HA-partner nodes are added automatically; to be sure you get every node of a larger cluster, enter all serials separated by space/comma. AutoSupport ids are time-based — narrow by date range to pick a subset.
         </div>
         <div className="toolbar" style={{ marginTop: 8, flexWrap: "wrap" }}>
-          <input placeholder="system serial number" value={query} onChange={(e) => setQuery(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
+          <input placeholder="system serial number(s)" value={query} onChange={(e) => setQuery(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
           <label className="muted" style={{ fontSize: 12 }}>From <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
           <label className="muted" style={{ fontSize: 12 }}>To <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
+          <label className="muted" style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <input type="checkbox" checked={includeCluster} onChange={(e) => setIncludeCluster(e.target.checked)} /> include all cluster nodes
+          </label>
           <button className="btn primary" onClick={runSearch} disabled={searching || !query.trim()}>{searching ? "Searching…" : "Search"}</button>
         </div>
 
@@ -166,6 +171,8 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
                   <tr>
                     <th style={{ width: 28 }}><input type="checkbox" checked={allSel} onChange={toggleAll} /></th>
                     <th>AutoSupport ID</th>
+                    <th>Node</th>
+                    <th>Type</th>
                     <th>Generated</th>
                   </tr>
                 </thead>
@@ -174,6 +181,8 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
                     <tr key={a.asup_id}>
                       <td><input type="checkbox" checked={sel.has(a.asup_id)} onChange={() => toggle(a.asup_id)} /></td>
                       <td className="mono">{a.asup_id}</td>
+                      <td>{a.node || "—"}</td>
+                      <td>{a.asup_type || "—"}</td>
                       <td>{a.generated_on || "—"}</td>
                     </tr>
                   ))}

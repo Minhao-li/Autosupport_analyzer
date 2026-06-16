@@ -144,6 +144,7 @@ class AsupListIn(BaseModel):
     query: str = ""
     date_from: Optional[str] = None      # YYYY-MM-DD (inclusive)
     date_to: Optional[str] = None        # YYYY-MM-DD (inclusive)
+    include_cluster: bool = True         # also list the other nodes in the cluster
 
 
 class AsupDownloadIn(BaseModel):
@@ -1250,11 +1251,33 @@ def _parse_date_field(v):
     return None
 
 
+_NODE_KEYS = ("hostname", "host_name", "node", "node_name", "nodename",
+              "sys_name", "system_name", "controller")
+_TYPE_KEYS = ("asup_type", "asuptype", "type", "asup_subject", "subject",
+              "trigger", "trigger_type")
+_SYS_KEYS = ("system_id", "systemid", "sys_id", "sysid")
+_PARTNER_KEYS = ("partner_system_id", "partnersystemid", "partner_id")
+_CLUSTER_KEYS = ("cluster_uuid", "cluster_id", "clusteruuid", "clusterid")
+_SERIAL_KEYS = ("sys_serial_no", "serial_number", "serialnumber", "serial", "serial_no")
+
+
+def _cluster_uuid_from_bizkey(bk) -> str | None:
+    # biz_key looks like "C|<cluster_uuid>|<n>|<serial>"
+    if isinstance(bk, str) and "|" in bk:
+        parts = bk.split("|")
+        if len(parts) >= 2 and len(parts[1]) >= 8:
+            return parts[1].strip()
+    return None
+
+
 def _extract_asup_entries(data, text: str):
-    """Pull {asup_id, generated_on} pairs out of an arbitrary JSON or text body."""
+    """Pull AutoSupport records (asup_id, generated_on, node, asup_type, and —
+    when present — system_id / partner_system_id / cluster_uuid / serial) out of
+    an arbitrary JSON or text body."""
     entries, seen = [], set()
 
-    def add(asup_id, gen):
+    def add(asup_id, gen, node=None, atype=None, sys_id=None,
+            partner=None, cluster=None, serial=None):
         sid = str(asup_id).strip()
         if not _looks_like_asup_id(sid) or sid in seen:
             return
@@ -1263,6 +1286,12 @@ def _extract_asup_entries(data, text: str):
         entries.append({
             "asup_id": sid,
             "generated_on": gen if gen else (dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None),
+            "node": str(node).strip() if node else None,
+            "asup_type": str(atype).strip() if atype else None,
+            "system_id": str(sys_id).strip() if sys_id else None,
+            "partner_system_id": str(partner).strip() if partner else None,
+            "cluster_uuid": str(cluster).strip() if cluster else None,
+            "serial": str(serial).strip() if serial else None,
             "_dt": dt,
         })
 
@@ -1272,8 +1301,10 @@ def _extract_asup_entries(data, text: str):
             id_val = next((obj[lower[k]] for k in _ID_KEYS
                            if k in lower and _looks_like_asup_id(obj[lower[k]])), None)
             if id_val is not None:
-                gen = next((obj[lower[k]] for k in _DATE_KEYS if k in lower and obj[lower[k]]), None)
-                add(id_val, gen)
+                pick = lambda keys: next((obj[lower[k]] for k in keys if k in lower and obj[lower[k]]), None)
+                cluster = pick(_CLUSTER_KEYS) or _cluster_uuid_from_bizkey(obj.get(lower.get("biz_key", "")))
+                add(id_val, pick(_DATE_KEYS), pick(_NODE_KEYS), pick(_TYPE_KEYS),
+                    pick(_SYS_KEYS), pick(_PARTNER_KEYS), cluster, pick(_SERIAL_KEYS))
             for v in obj.values():
                 visit(v)
         elif isinstance(obj, list):
@@ -1311,30 +1342,88 @@ def asup_download_list(body: AsupListIn):
     # range in the URL; default to a wide window when the user leaves them blank.
     df = (body.date_from or "2000-01-01").strip()
     dt_ = (body.date_to or datetime.now(timezone.utc).strftime("%Y-%m-%d")).strip()
-    url = tmpl.replace("{query}", quote(query, safe="")) \
-              .replace("{date_from}", quote(df, safe="")) \
-              .replace("{date_to}", quote(dt_, safe=""))
-    if "{query}" not in tmpl and "query=" not in url and "sys_serial_no" not in url:
-        url = url + ("&" if "?" in url else "?") + "query=" + quote(query, safe="")
-    try:
-        raw, _ = _http_get(url, token, timeout=60)
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read(500).decode("utf-8", "replace")
-        except Exception:
-            pass
-        raise HTTPException(status_code=502,
-                            detail=f"Search failed: HTTP {e.code} {e.reason} {detail}".strip())
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Search failed: {e}")
 
-    text = raw.decode("utf-8", "replace")
-    try:
-        data = json.loads(text)
-    except ValueError:
-        data = None
-    entries = _extract_asup_entries(data, text)
+    def build_serial_url(serial):
+        u = tmpl.replace("{query}", quote(serial, safe="")) \
+                .replace("{date_from}", quote(df, safe="")) \
+                .replace("{date_to}", quote(dt_, safe=""))
+        if "{query}" not in tmpl and "query=" not in u and "sys_serial_no" not in u:
+            u = u + ("&" if "?" in u else "?") + "query=" + quote(serial, safe="")
+        return u
+
+    def fetch_entries(u):
+        raw, _ = _http_get(u, token, timeout=60)
+        text = raw.decode("utf-8", "replace")
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        return _extract_asup_entries(data, text)
+
+    url = build_serial_url(query)
+    serials = [s for s in re.split(r"[\s,;]+", query) if s.strip()]
+    if not serials:
+        serials = [query]
+    entries = []
+    seen_ids = set()
+    first_err = None
+    for s in serials:
+        try:
+            for e in fetch_entries(build_serial_url(s)):
+                if e.get("asup_id") not in seen_ids:
+                    seen_ids.add(e.get("asup_id"))
+                    entries.append(e)
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read(500).decode("utf-8", "replace")
+            except Exception:
+                pass
+            first_err = first_err or f"Search failed: HTTP {e.code} {e.reason} {detail}".strip()
+        except Exception as e:
+            first_err = first_err or f"Search failed: {e}"
+    if not entries and first_err:
+        raise HTTPException(status_code=502, detail=first_err)
+
+    nodes = {(e.get("node"), e.get("serial")) for e in entries
+             if e.get("node") and e.get("node") not in ("-", "—")}
+    cluster_note = None
+    # Expand to the other nodes in the same cluster. asup-list is per-node, so we
+    # discover sibling nodes by following partner_system_id (HA partner) via the
+    # system_id endpoint, staying within the same cluster_uuid. This reliably
+    # covers the HA pair(s) reachable from the queried node.
+    if body.include_cluster and "/sys_serial_no/" in url:
+        base = url.split("/sys_serial_no/")[0]
+        qstr = ("?" + url.split("?", 1)[1]) if "?" in url else ""
+        seed_cluster = next((e.get("cluster_uuid") for e in entries if e.get("cluster_uuid")), None)
+        seen_sys = {e.get("system_id") for e in entries if e.get("system_id")}
+        seen_serial = {e.get("serial") for e in entries if e.get("serial")}
+        queue = [e.get("partner_system_id") for e in entries if e.get("partner_system_id")]
+        queue = [s for s in dict.fromkeys(queue) if s and s not in seen_sys]
+        try:
+            guard = 0
+            while queue and guard < 16:
+                guard += 1
+                sid = queue.pop(0)
+                if sid in seen_sys:
+                    continue
+                seen_sys.add(sid)
+                sib = fetch_entries(f"{base}/system_id/{quote(str(sid), safe='')}{qstr}")
+                sib_cluster = next((e.get("cluster_uuid") for e in sib if e.get("cluster_uuid")), None)
+                if seed_cluster and sib_cluster and sib_cluster != seed_cluster:
+                    continue
+                for e in sib:
+                    if e.get("asup_id") not in {x.get("asup_id") for x in entries}:
+                        entries.append(e)
+                    if e.get("node") and e.get("node") not in ("-", "—"):
+                        nodes.add((e.get("node"), e.get("serial")))
+                    if e.get("serial"):
+                        seen_serial.add(e.get("serial"))
+                    p = e.get("partner_system_id")
+                    if p and p not in seen_sys and p not in queue:
+                        queue.append(p)
+        except Exception as ex:
+            cluster_note = f"Cluster expansion incomplete: {ex}"
 
     def in_range(e):
         dt = e.get("_dt")
@@ -1356,9 +1445,15 @@ def asup_download_list(body: AsupListIn):
         return True
 
     filtered = [e for e in entries if in_range(e)]
-    filtered.sort(key=lambda e: (e.get("_dt") or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
-    out = [{"asup_id": e["asup_id"], "generated_on": e["generated_on"]} for e in filtered]
-    return {"url": url, "count": len(out), "total": len(entries), "asups": out}
+    filtered.sort(key=lambda e: ((e.get("node") or ""),
+                                 -(e.get("_dt") or datetime.min.replace(tzinfo=timezone.utc)).timestamp()))
+    out = [{"asup_id": e["asup_id"], "generated_on": e["generated_on"],
+            "node": e.get("node"), "asup_type": e.get("asup_type"),
+            "serial": e.get("serial")} for e in filtered]
+    node_list = sorted({n for n, _ in nodes if n})
+    return {"url": url, "count": len(out), "total": len(entries),
+            "nodes": node_list, "node_count": len(node_list),
+            "note": cluster_note, "asups": out}
 
 
 def _archive_ext_for(data: bytes, disposition: str = "") -> str:
