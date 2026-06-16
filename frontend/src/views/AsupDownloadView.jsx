@@ -148,10 +148,10 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
       <div className="card">
         <b>2 · Find AutoSupports</b>
         <div className="info-text" style={{ fontSize: 12, marginTop: 4 }}>
-          Search by serial number / case number (e.g. <span className="mono">722042000140</span>). AutoSupport ids are time-based; narrow by date range to pick a subset.
+          Search by system serial number (e.g. <span className="mono">722042000140</span>). AutoSupport ids are time-based; narrow by date range to pick a subset.
         </div>
         <div className="toolbar" style={{ marginTop: 8, flexWrap: "wrap" }}>
-          <input placeholder="serial / case number" value={query} onChange={(e) => setQuery(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
+          <input placeholder="system serial number" value={query} onChange={(e) => setQuery(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
           <label className="muted" style={{ fontSize: 12 }}>From <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
           <label className="muted" style={{ fontSize: 12 }}>To <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
           <button className="btn primary" onClick={runSearch} disabled={searching || !query.trim()}>{searching ? "Searching…" : "Search"}</button>
@@ -221,10 +221,10 @@ export default function AsupDownloadView({ pollJob, onLoaded }) {
         </div>
         <div style={{ marginTop: 8 }}>
           <label className="info-text" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-            Search/list URL — point this at the JSON API that returns the AutoSupport list for a query. Use <span className="mono">{"{query}"}</span> as the placeholder:
+            Search/list URL — the ActiveIQ asup-viewer list endpoint. Placeholders: <span className="mono">{"{query}"}</span> (serial number), <span className="mono">{"{date_from}"}</span>, <span className="mono">{"{date_to}"}</span>:
           </label>
           <input value={searchUrl} onChange={(e) => setSearchUrl(e.target.value)} style={{ width: "100%" }}
-            placeholder="https://smartsolve.netapp.com/#search?query={query}" disabled={running} />
+            placeholder="https://apigtwyapps.netapp.com/aiq/api/asup-viewer/v0/asup-list/sys_serial_no/{query}?system_state=all&product_type=all&start_date={date_from}&end_date={date_to}" disabled={running} />
         </div>
         <div className="toolbar" style={{ marginTop: 8 }}>
           <button className="btn" onClick={saveConfig} disabled={running}>Save endpoints</button>

@@ -1094,11 +1094,16 @@ DEFAULT_AIQ_UPLOAD_BASE = (
 DEFAULT_AIQ_DOWNLOAD_BASE = (
     "https://apigtwyapps.netapp.com/aiq/api/asup-viewer/v0/asup-download/asup_id"
 )
-# Template used to fetch the AutoSupport list for a query (serial / case number).
-# {query} is substituted with the URL-encoded query. The smartsolve URL below is
-# the browser search page; point this at the JSON search API that backs it (or
-# any endpoint returning ASUP ids) to enable server-side listing.
-DEFAULT_AIQ_SEARCH_URL = "https://smartsolve.netapp.com/#search?query={query}"
+# Template used to fetch the AutoSupport list for a query (serial number).
+# {query} is the URL-encoded serial number; {date_from}/{date_to} are the
+# YYYY-MM-DD range (defaulted server-side when the user leaves them blank).
+# This is the ActiveIQ asup-viewer "asup-list" endpoint, which the upload token
+# is authorized for (the smartsolve SPA's smso/v2 API uses a different token).
+DEFAULT_AIQ_SEARCH_URL = (
+    "https://apigtwyapps.netapp.com/aiq/api/asup-viewer/v0/asup-list/"
+    "sys_serial_no/{query}?system_state=all&product_type=all"
+    "&start_date={date_from}&end_date={date_to}"
+)
 
 
 def _get_setting(key, default=None):
@@ -1203,8 +1208,8 @@ def asup_set_download_config(body: DownloadConfigIn):
 
 
 _ID_KEYS = ("asup_id", "asupid", "asup", "sequence", "seq_num", "seqno", "seq", "id")
-_DATE_KEYS = ("generated_on", "generatedon", "date_generated", "gen_date",
-              "generated", "collection_date", "asup_date", "timestamp",
+_DATE_KEYS = ("asup_gen_date", "generated_on", "generatedon", "date_generated",
+              "gen_date", "generated", "collection_date", "asup_date", "timestamp",
               "created", "created_on", "date", "received", "received_on")
 
 
@@ -1302,8 +1307,15 @@ def asup_download_list(body: AsupListIn):
     tmpl = _search_url()
     import urllib.error
     from urllib.parse import quote
-    url = tmpl.replace("{query}", quote(query)) if "{query}" in tmpl else (
-        tmpl + ("&" if "?" in tmpl else "?") + "query=" + quote(query))
+    # Date placeholders for endpoints (like asup-list) that take an explicit
+    # range in the URL; default to a wide window when the user leaves them blank.
+    df = (body.date_from or "2000-01-01").strip()
+    dt_ = (body.date_to or datetime.now(timezone.utc).strftime("%Y-%m-%d")).strip()
+    url = tmpl.replace("{query}", quote(query, safe="")) \
+              .replace("{date_from}", quote(df, safe="")) \
+              .replace("{date_to}", quote(dt_, safe=""))
+    if "{query}" not in tmpl and "query=" not in url and "sys_serial_no" not in url:
+        url = url + ("&" if "?" in url else "?") + "query=" + quote(query, safe="")
     try:
         raw, _ = _http_get(url, token, timeout=60)
     except urllib.error.HTTPError as e:
