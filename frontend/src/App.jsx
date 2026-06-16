@@ -64,7 +64,9 @@ export default function App() {
 
   useEffect(() => { api.me().then(setMe).catch(() => setMe(null)); }, []);
   useEffect(() => {
-    if (!me) return;
+    // me === undefined means still loading; null means anonymous Guest. Guests
+    // must still see loaded AutoSupports, so only bail while auth is resolving.
+    if (me === undefined) return;
     api.plugins().then(setPlugins).catch(() => {});
     refreshCases();
     api.quota().then(setQuota).catch(() => {});
