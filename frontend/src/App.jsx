@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./lib/api.js";
-import { fmtBytes, verticalColor as vColor, caseLabel, ExpandToggle, buildCaseTree, countAsup, collectTreeKeys, collectKeysByKind, asupTypeClass, TREE_ICON as SHARED_TREE_ICON } from "./lib/helpers.jsx";
+import { fmtBytes, verticalColor as vColor, caseLabel, ExpandToggle, buildCaseTree, countAsup, collectCaseIds, collectTreeKeys, collectKeysByKind, asupTypeClass, TREE_ICON as SHARED_TREE_ICON } from "./lib/helpers.jsx";
 import Login from "./views/Login.jsx";
 import ComponentView from "./views/ComponentView.jsx";
 import SearchView from "./views/SearchView.jsx";
@@ -170,6 +170,16 @@ export default function App() {
     if (!confirm("Delete this case?")) return;
     try { await api.deleteCase(id); if (caseId === id) setCaseId(null); refreshCases(); }
     catch (e) { setErr(String(e.message || e)); }
+  };
+
+  // Delete every AutoSupport beneath a tree group (a case #, cluster or node).
+  const onDeleteGroup = async (ids, label) => {
+    if (!ids || !ids.length) return;
+    if (!confirm(`Delete ${ids.length} AutoSupport(s) under "${label}"? This cannot be undone.`)) return;
+    try {
+      for (const id of ids) { await api.deleteCase(id); if (caseId === id) setCaseId(null); }
+      await refreshCases();
+    } catch (e) { setErr(String(e.message || e)); }
   };
 
   const onDeleteAll = async () => {
@@ -373,6 +383,7 @@ export default function App() {
           onClose={() => setHistoryOpen(false)}
           onPick={(id) => { setCaseId(id); setView({ kind: "home" }); setHistoryOpen(false); }}
           onDelete={onDelete}
+          onDeleteGroup={onDeleteGroup}
           onDeleteAll={onDeleteAll}
         />
       )}
@@ -406,19 +417,29 @@ function LoadProgress({ phase, detail, done, total, label }) {
 const TREE_ICON = SHARED_TREE_ICON;
 
 // Map an AutoSupport type to a colour class (semantic, consistent colours).
-function CaseTreeNode({ node, depth, expanded, toggle, caseId, isAdmin, onPick, onDelete }) {
+function CaseTreeNode({ node, depth, expanded, toggle, caseId, isAdmin, onPick, onDelete, onDeleteGroup }) {
   const open = expanded.has(node.key);
+  const groupCount = countAsup(node);
   return (
     <div>
       <div className="case-tree-row" style={{ paddingLeft: depth * 18 + 8 }}
         onClick={() => toggle(node.key)}>
         <span className={`tree-chev ${open ? "open" : ""}`}>▶</span>
         <span className="case-tree-label">{TREE_ICON[node.kind]} {node.label}</span>
-        <span className="muted case-tree-count">{countAsup(node)} ASUP</span>
+        <span className="muted case-tree-count">{groupCount} ASUP</span>
+        {isAdmin && onDeleteGroup && groupCount > 0 && (
+          <span className="case-tree-actions">
+            <button className="icon-btn danger"
+              title={`Delete all ${groupCount} AutoSupport(s) under this ${node.kind}`}
+              onClick={(e) => { e.stopPropagation(); onDeleteGroup(collectCaseIds(node), `${TREE_ICON[node.kind] || ""} ${node.label}`.trim()); }}>
+              Delete {node.kind}
+            </button>
+          </span>
+        )}
       </div>
       {open && (node.children || []).map((ch) => (
         <CaseTreeNode key={ch.key} node={ch} depth={depth + 1} expanded={expanded}
-          toggle={toggle} caseId={caseId} isAdmin={isAdmin} onPick={onPick} onDelete={onDelete} />
+          toggle={toggle} caseId={caseId} isAdmin={isAdmin} onPick={onPick} onDelete={onDelete} onDeleteGroup={onDeleteGroup} />
       ))}
       {open && (node.cases || []).map((c) => (
         <div key={c.id} className={`case-tree-row leaf ${c.id === caseId ? "active" : ""}`}
@@ -494,7 +515,7 @@ function CasePicker({ cases, caseId, onPick }) {
   );
 }
 
-function HistoryModal({ cases, caseId, isAdmin, onClose, onPick, onDelete, onDeleteAll }) {
+function HistoryModal({ cases, caseId, isAdmin, onClose, onPick, onDelete, onDeleteGroup, onDeleteAll }) {
   const tree = useMemo(() => buildCaseTree(cases), [cases]);
   const allKeys = useMemo(() => collectTreeKeys(tree), [tree]);
   const [expanded, setExpanded] = useState(new Set());
@@ -521,7 +542,7 @@ function HistoryModal({ cases, caseId, isAdmin, onClose, onPick, onDelete, onDel
           <div className="case-tree">
             {tree.map((n) => (
               <CaseTreeNode key={n.key} node={n} depth={0} expanded={expanded} toggle={toggle}
-                caseId={caseId} isAdmin={isAdmin} onPick={onPick} onDelete={onDelete} />
+                caseId={caseId} isAdmin={isAdmin} onPick={onPick} onDelete={onDelete} onDeleteGroup={onDeleteGroup} />
             ))}
           </div>
         )}

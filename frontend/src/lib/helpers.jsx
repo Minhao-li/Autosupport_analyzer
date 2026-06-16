@@ -96,6 +96,13 @@ export function countAsup(node) {
     (node.children || []).reduce((a, c) => a + countAsup(c), 0);
 }
 
+// Collect every AutoSupport case id beneath a tree node (recursively).
+export function collectCaseIds(node, acc = []) {
+  (node.cases || []).forEach((c) => acc.push(c.id));
+  (node.children || []).forEach((c) => collectCaseIds(c, acc));
+  return acc;
+}
+
 export function collectTreeKeys(nodes, acc = []) {
   for (const n of nodes) { acc.push(n.key); collectTreeKeys(n.children || [], acc); }
   return acc;
